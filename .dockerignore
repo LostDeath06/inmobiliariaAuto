@@ -1,0 +1,26 @@
+# Contexto de build del backend: fuera todo lo que no hace falta en la imagen.
+# Importante: .env NUNCA entra en la imagen (los secretos se pasan en ejecución).
+.env
+.env.*
+!.env.example
+
+.git
+.gitignore
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# El frontend tiene su propio contexto de build
+frontend/node_modules/
+frontend/dist/
+
+tests/
+docs/capturas/
+*.bat
+*.log
+volumenes_docker/
+datos_postgres/

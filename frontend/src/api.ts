@@ -1,4 +1,8 @@
-const BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+// `??` y no `||`: en producción VITE_API_URL se compila VACÍA a propósito, para que
+// las llamadas salgan relativas (/api/...) al mismo origen y las sirva el proxy de
+// nginx. Con `||`, la cadena vacía es falsy y caería de vuelta a localhost:8000,
+// que en el VPS no existe desde el navegador del usuario.
+const BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
 async function req(metodo: string, ruta: string, cuerpo?: unknown) {
   const opciones: RequestInit = {

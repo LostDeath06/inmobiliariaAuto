@@ -1,26 +1,134 @@
-# PostgreSQL local para desarrollo (equivalente al Postgres de Supabase).
-# En producción se usa la instancia gestionada de Supabase; este compose es
-# solo para levantar la BD en local y poder ejecutar migraciones y tests.
+# =============================================================================
+#  Stack completo: Postgres + migraciones + API + worker + frontend/nginx.
+#
+#  DOS MODOS, un solo fichero:
+#
+#   · Desarrollo local (Windows):  docker compose up -d
+#       Levanta SOLO Postgres. El backend y el frontend los arrancas con
+#       ARRANCAR.bat (uvicorn + vite) como hasta ahora. Nada cambia para ti.
+#
+#   · VPS (producción):            docker compose --profile vps up -d --build
+#       Levanta las cuatro piezas. Si en el .env del VPS pones COMPOSE_PROFILES=vps,
+#       basta con `docker compose up -d`.
+#
+#  El perfil existe justo para eso: que el mismo repo sirva en tu portátil sin
+#  arrancarte contenedores que chocarían con el uvicorn/vite locales.
+# =============================================================================
+
 services:
+
+  # --- Base de datos --------------------------------------------------------
   postgres:
     image: postgres:16-alpine
     container_name: inmobiliaria_db
     environment:
-      POSTGRES_USER: inmo
-      POSTGRES_PASSWORD: inmo
-      POSTGRES_DB: inmobiliaria
+      POSTGRES_USER: ${POSTGRES_USER:-inmo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-inmo}
+      POSTGRES_DB: ${POSTGRES_DB:-inmobiliaria}
     ports:
-      - "5455:5432"
+      # Atado a 127.0.0.1: accesible desde el propio VPS o por túnel SSH,
+      # NUNCA desde internet. No lo cambies a "5455:5432" en un servidor público.
+      - "127.0.0.1:${PUERTO_DB:-5455}:5432"
     volumes:
       - datos_postgres:/var/lib/postgresql/data
-      # Las migraciones se aplican con scripts/aplicar_migraciones.py,
-      # no con el autoload de /docker-entrypoint-initdb.d, para mantener
-      # el versionado explícito y reejecutable.
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U inmo -d inmobiliaria"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-inmo} -d ${POSTGRES_DB:-inmobiliaria}"]
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
+
+  # --- Migraciones + seeds (one-shot, corre y termina) ----------------------
+  # El backend NO acepta tráfico hasta que esto acaba con éxito
+  # (depends_on: service_completed_successfully). Es idempotente: reejecutarlo
+  # no reaplica migraciones ya registradas.
+  migraciones:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: inmobiliaria-backend:latest
+    profiles: ["vps"]
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-inmo}:${POSTGRES_PASSWORD:-inmo}@postgres:5432/${POSTGRES_DB:-inmobiliaria}
+    command: ["python", "scripts/aplicar_migraciones.py"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # --- API ------------------------------------------------------------------
+  # Sin `ports`: no se publica al exterior. Solo se llega por el nginx del
+  # frontend, que es quien exige la contraseña.
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: inmobiliaria-backend:latest
+    profiles: ["vps"]
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-inmo}:${POSTGRES_PASSWORD:-inmo}@postgres:5432/${POSTGRES_DB:-inmobiliaria}
+    extra_hosts:
+      # Para cuando montes OpenClaw en el propio VPS (fuera de Docker): dentro de
+      # un contenedor "localhost" es el contenedor, NO el host. Con esto, el
+      # backend llega al host por http://host.docker.internal:PUERTO
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migraciones:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/api/salud || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  # --- Worker de cron (APScheduler) ----------------------------------------
+  # En contenedor aparte, no dentro de la API. Ver DESPLIEGUE.md para el porqué.
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: inmobiliaria-backend:latest
+    profiles: ["vps"]
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-inmo}:${POSTGRES_PASSWORD:-inmo}@postgres:5432/${POSTGRES_DB:-inmobiliaria}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["python", "-m", "backend.worker.worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migraciones:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # --- Frontend + reverse proxy + auth --------------------------------------
+  # Única pieza que publica puerto. Todo entra por aquí y todo pide contraseña.
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: inmobiliaria-frontend:latest
+    profiles: ["vps"]
+    environment:
+      APP_USUARIO: ${APP_USUARIO:-admin}
+      # Sin valor obligatorio aquí a propósito: compose interpola TODO el fichero
+      # aunque solo arranques `db`, y un `:?` rompería el flujo local de Windows.
+      # Quien exige la contraseña es el arranque del contenedor
+      # (docker-entrypoint-auth.sh), que falla si viene vacía.
+      APP_PASSWORD: ${APP_PASSWORD:-}
+    ports:
+      - "${PUERTO_HTTP:-80}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   datos_postgres:
