@@ -1,0 +1,26 @@
+# PostgreSQL local para desarrollo (equivalente al Postgres de Supabase).
+# En producción se usa la instancia gestionada de Supabase; este compose es
+# solo para levantar la BD en local y poder ejecutar migraciones y tests.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: inmobiliaria_db
+    environment:
+      POSTGRES_USER: inmo
+      POSTGRES_PASSWORD: inmo
+      POSTGRES_DB: inmobiliaria
+    ports:
+      - "5455:5432"
+    volumes:
+      - datos_postgres:/var/lib/postgresql/data
+      # Las migraciones se aplican con scripts/aplicar_migraciones.py,
+      # no con el autoload de /docker-entrypoint-initdb.d, para mantener
+      # el versionado explícito y reejecutable.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inmo -d inmobiliaria"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  datos_postgres:

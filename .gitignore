@@ -1,0 +1,30 @@
+# Entorno
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Datos locales
+*.sqlite
+*.db
+volumenes_docker/
+datos_postgres/
+
+# Frontend (Fase 8-9)
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Sistema operativo / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
