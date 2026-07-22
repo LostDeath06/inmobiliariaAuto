@@ -149,6 +149,8 @@ Diagnóstico rápido de los fallos más probables:
 | Síntoma | Causa casi segura | Arreglo |
 |---|---|---|
 | `frontend` se reinicia en bucle | `APP_PASSWORD` vacía | Rellénala en `.env` y `docker compose up -d --force-recreate frontend` |
+| `[emerg] host not found in upstream "backend"` | Versión antigua del `nginx.conf`: nginx resolvía el backend al arrancar y moría si aún no existía | Ya corregido (resolución diferida con el DNS de Docker). Asegúrate de traerlo con `git pull` y **reconstruir**: `docker compose --profile vps up -d --build frontend` |
+| `/api` devuelve 502 pero la web carga | El backend está caído o aún arrancando | `docker compose --profile vps logs backend`. nginx se reengancha solo en cuanto vuelva; no hace falta reiniciarlo |
 | `backend` no arranca | `migraciones` falló | `docker compose logs migraciones` y mira el error de SQL/conexión |
 | Web carga pero sin datos | Falta `ANTHROPIC_API_KEY`, o no hay inmuebles | Ver "Estado por país" en la app |
 | El navegador no conecta | Cortafuegos del VPS | `sudo ufw allow 80/tcp` |
