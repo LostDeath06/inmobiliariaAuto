@@ -649,6 +649,24 @@ export function fmtNum(valor: unknown, decimales = 0) {
   return n.toLocaleString("es-ES", { minimumFractionDigits: decimales, maximumFractionDigits: decimales });
 }
 
+/** Cantidad "limpia": hasta 2 decimales, sin ceros de cola. Para no volcar el
+ *  `400.000000` crudo del Decimal de BD. 4300 → "4.300", 17.4 → "17,4". */
+export function fmtCantidad(valor: unknown): string {
+  if (valor === null || valor === undefined || valor === "") return "—";
+  const n = Number(valor);
+  if (Number.isNaN(n)) return String(valor);
+  return n.toLocaleString("es-ES", { maximumFractionDigits: 2 });
+}
+
+/** Fracción → porcentaje legible. El motor guarda 0.07; en pantalla es "7 %".
+ *  Hasta 2 decimales sin ceros de cola: 0.0125 → "1,25 %", 0.10 → "10 %". */
+export function fmtPorcentaje(fraccion: unknown): string {
+  if (fraccion === null || fraccion === undefined || fraccion === "") return "—";
+  const n = Number(fraccion);
+  if (Number.isNaN(n)) return "—";
+  return `${(n * 100).toLocaleString("es-ES", { maximumFractionDigits: 2 })} %`;
+}
+
 /** Redondeo SOLO de presentación para las métricas del motor.
  *  El motor trabaja en Decimal exacto y así se guarda; volcar los 28 dígitos en
  *  pantalla no es precisión, es ruido. El valor exacto sigue en la auditoría (hover).

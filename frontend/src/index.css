@@ -209,6 +209,22 @@
     background: hsl(var(--accent));
   }
 
+  /* Desplegables (<details>): sin el triángulo nativo, con un chevron propio que
+     gira al abrir. Se usa para colapsar los gastos por comunidad (19 ITP en un
+     solo grupo en vez de 19 filas planas). */
+  details > summary {
+    @apply cursor-pointer list-none select-none;
+  }
+  details > summary::-webkit-details-marker {
+    display: none;
+  }
+  details > summary .chevron {
+    transition: transform 150ms var(--sal);
+  }
+  details[open] > summary .chevron {
+    transform: rotate(90deg);
+  }
+
   /* Tooltip de recharts: mismo objeto flotante que el resto de la app. */
   .recharts-default-tooltip,
   .recharts-tooltip-wrapper > div {
