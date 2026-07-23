@@ -13,14 +13,28 @@ const enlaces = [
 
 export default function App() {
   const [menuAbierto, setMenuAbierto] = useState(false);
+  const [desplazado, setDesplazado] = useState(false);
   const { pathname } = useLocation();
 
   // Al navegar, cerrar el menú: en móvil se queda abierto tapando la pantalla.
   useEffect(() => { setMenuAbierto(false); }, [pathname]);
 
+  // La cabecera solo proyecta sombra cuando hay contenido pasando por debajo.
+  // En el tope de la página no hay nada que separar, y una sombra ahí es ruido.
+  useEffect(() => {
+    const alDesplazar = () => setDesplazado(window.scrollY > 4);
+    alDesplazar();
+    window.addEventListener("scroll", alDesplazar, { passive: true });
+    return () => window.removeEventListener("scroll", alDesplazar);
+  }, []);
+
   return (
     <div className="min-h-screen flex flex-col bg-base">
-      <header className="sticky top-0 z-20 bg-surface/95 backdrop-blur border-b border-line">
+      <header
+        className={`sticky top-0 z-20 bg-surface/95 backdrop-blur border-b transition-[box-shadow,border-color] duration-200 ${
+          desplazado ? "shadow-elev-2 border-line" : "border-line/60"
+        }`}
+      >
         <div className="max-w-[1400px] mx-auto px-4 md:px-6 h-14 flex items-center gap-4 md:gap-8">
           <div className="flex items-center gap-2.5 min-w-0">
             <span className="h-5 w-5 rounded bg-accent shrink-0" aria-hidden />
@@ -29,7 +43,8 @@ export default function App() {
             </span>
           </div>
 
-          {/* Navegación de escritorio */}
+          {/* Navegación de escritorio. La pestaña activa lleva además una guía de
+              acento debajo: el fondo solo no basta para saber dónde estás. */}
           <nav className="hidden lg:flex gap-0.5 text-[13px]">
             {enlaces.map((e) => (
               <NavLink
@@ -37,14 +52,24 @@ export default function App() {
                 to={e.a}
                 end={e.a === "/"}
                 className={({ isActive }) =>
-                  `px-3 py-1.5 rounded-md whitespace-nowrap transition ${
+                  `relative px-3 py-1.5 rounded-md whitespace-nowrap transition-colors duration-150 ${
                     isActive
                       ? "bg-elevated text-fg font-medium"
                       : "text-muted hover:text-fg hover:bg-elevated/60"
                   }`
                 }
               >
-                {e.t}
+                {({ isActive }) => (
+                  <>
+                    {e.t}
+                    <span
+                      className={`absolute left-3 right-3 -bottom-[7px] h-px bg-accent transition-opacity duration-200 ${
+                        isActive ? "opacity-100" : "opacity-0"
+                      }`}
+                      aria-hidden
+                    />
+                  </>
+                )}
               </NavLink>
             ))}
           </nav>
@@ -73,7 +98,7 @@ export default function App() {
 
         {/* Panel desplegable de navegación (móvil). Cada entrada con 44px de alto. */}
         {menuAbierto && (
-          <nav className="lg:hidden border-t border-line bg-surface px-2 py-2 space-y-0.5">
+          <nav className="lg:hidden border-t border-line bg-surface px-2 py-2 space-y-0.5 desplegar shadow-elev-2">
             {enlaces.map((e) => (
               <NavLink
                 key={e.a}

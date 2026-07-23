@@ -1,4 +1,12 @@
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 
 /** ¿Estamos en pantalla estrecha? Para lo que CSS no puede resolver solo
  *  (props de recharts, cambiar tabla por tarjetas). Presentación, nada más. */
@@ -16,8 +24,12 @@ export function useEsMovil(ancho = 768) {
   return esMovil;
 }
 
+/** Índice para la aparición escalonada: `<li {...paso(i)}>` dentro de `.escalonado`. */
+export const paso = (i: number) => ({ style: { "--i": i } as CSSProperties });
+
 /* Primitivas de UI del terminal. Sobrias por diseño: escala de grises + un acento
-   frío + estados semánticos de baja saturación. Sin sombras llamativas ni adornos. */
+   frío + estados semánticos de baja saturación. La profundidad viene de la
+   elevación (sombras suaves + canto de 1px), nunca de brillos ni gradientes. */
 
 export function Card({
   titulo,
@@ -33,7 +45,9 @@ export function Card({
   className?: string;
 }) {
   return (
-    <section className={`bg-surface border border-line rounded-lg ${className}`}>
+    <section
+      className={`bg-surface border border-line rounded-lg shadow-elev-1 transition-shadow duration-200 hover:shadow-elev-2 ${className}`}
+    >
       {(titulo || acciones) && (
         <header className="flex items-center justify-between gap-3 px-3 md:px-4 min-h-[44px] md:h-11 py-2 md:py-0 border-b border-line">
           <div className="min-w-0">
@@ -56,6 +70,7 @@ export function Boton({
   variante = "primario",
   tipo = "button",
   disabled,
+  cargando,
   title,
   className = "",
 }: {
@@ -64,12 +79,13 @@ export function Boton({
   variante?: "primario" | "secundario" | "fantasma" | "peligro";
   tipo?: "button" | "submit";
   disabled?: boolean;
+  cargando?: boolean;
   title?: string;
   className?: string;
 }) {
   const estilos = {
-    primario: "bg-accent text-accent-contrast hover:bg-accent/90",
-    secundario: "bg-elevated text-fg border border-line hover:border-muted/40",
+    primario: "bg-accent text-accent-contrast hover:bg-accent/90 shadow-elev-1 hover:shadow-elev-2",
+    secundario: "bg-elevated text-fg border border-line hover:border-muted/40 shadow-elev-1 hover:shadow-elev-2",
     fantasma: "text-muted hover:text-fg hover:bg-elevated",
     peligro: "bg-danger/10 text-danger border border-danger/30 hover:bg-danger/20",
   }[variante];
@@ -77,12 +93,122 @@ export function Boton({
     <button
       type={tipo}
       onClick={onClick}
-      disabled={disabled}
+      disabled={disabled || cargando}
       title={title}
-      className={`inline-flex items-center justify-center gap-1.5 px-4 md:px-3 min-h-[44px] md:min-h-0 md:py-1.5 rounded-md text-sm md:text-[13px] font-medium transition disabled:opacity-40 disabled:cursor-not-allowed ${estilos} ${className}`}
+      className={`inline-flex items-center justify-center gap-1.5 px-4 lg:px-3 min-h-[44px] lg:min-h-0 lg:py-1.5 rounded-md text-sm lg:text-[13px] font-medium
+        transition-[background-color,border-color,box-shadow,transform,opacity] duration-150
+        active:translate-y-px disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none disabled:active:translate-y-0 ${estilos} ${className}`}
     >
+      {cargando && <Girador />}
       {children}
     </button>
+  );
+}
+
+/** Indicador de trabajo en curso. Funcional: dice que el sistema está ocupado. */
+function Girador() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" className="shrink-0 animate-spin" aria-hidden>
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" opacity="0.25" />
+      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/* --- Pista: explicación consultable también con el dedo ---------------------
+   Los `title` nativos no existen en táctil (§11.7): en un móvil los badges del
+   ranking eran marcas mudas. Esta pista abre con pulsación y con hover, se
+   posiciona en coordenadas de viewport (así no la recorta ningún contenedor con
+   `overflow-hidden`) y se pega al borde si no cabe. -------------------------- */
+
+export function Pista({
+  children,
+  texto,
+  className = "",
+}: {
+  children: ReactNode;
+  texto: string;
+  className?: string;
+}) {
+  const [abierta, setAbierta] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const anclaRef = useRef<HTMLButtonElement>(null);
+  const globoRef = useRef<HTMLDivElement>(null);
+
+  const colocar = useCallback(() => {
+    const ancla = anclaRef.current;
+    const globo = globoRef.current;
+    if (!ancla || !globo) return;
+    const a = ancla.getBoundingClientRect();
+    const g = globo.getBoundingClientRect();
+    const margen = 8;
+    const left = Math.min(
+      Math.max(margen, a.left + a.width / 2 - g.width / 2),
+      window.innerWidth - g.width - margen,
+    );
+    // Debajo por defecto; arriba si no cabe (móvil, badges al pie de la tarjeta).
+    const cabeDebajo = a.bottom + g.height + margen < window.innerHeight;
+    setPos({ top: cabeDebajo ? a.bottom + 6 : a.top - g.height - 6, left });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (abierta) colocar();
+  }, [abierta, colocar]);
+
+  useEffect(() => {
+    if (!abierta) return;
+    const cerrar = () => setAbierta(false);
+    const alPulsarFuera = (e: PointerEvent) => {
+      if (!anclaRef.current?.contains(e.target as Node)) cerrar();
+    };
+    const alTeclear = (e: KeyboardEvent) => e.key === "Escape" && cerrar();
+    document.addEventListener("pointerdown", alPulsarFuera);
+    document.addEventListener("keydown", alTeclear);
+    window.addEventListener("scroll", cerrar, true);
+    window.addEventListener("resize", cerrar);
+    return () => {
+      document.removeEventListener("pointerdown", alPulsarFuera);
+      document.removeEventListener("keydown", alTeclear);
+      window.removeEventListener("scroll", cerrar, true);
+      window.removeEventListener("resize", cerrar);
+    };
+  }, [abierta]);
+
+  return (
+    <>
+      <button
+        ref={anclaRef}
+        type="button"
+        aria-label={texto}
+        aria-expanded={abierta}
+        onClick={(e) => {
+          // En el ranking la tarjeta entera es un enlace: consultar la marca no
+          // debe navegar a la ficha.
+          e.preventDefault();
+          e.stopPropagation();
+          setAbierta((v) => !v);
+        }}
+        onMouseEnter={() => setAbierta(true)}
+        onMouseLeave={() => setAbierta(false)}
+        // El badge mide 18px de alto: se le amplía el área de pulsación con un
+        // pseudo-elemento invisible (~42px) sin engordarlo ni descuadrar la fila.
+        // Solo 2px a los lados, o dos marcas contiguas se solaparían.
+        className={`relative inline-flex cursor-help before:absolute before:-inset-y-3 before:-inset-x-0.5 before:content-[''] ${className}`}
+      >
+        {children}
+      </button>
+      {abierta && (
+        <div
+          ref={globoRef}
+          role="tooltip"
+          style={{ top: pos?.top ?? -9999, left: pos?.left ?? -9999 }}
+          className="fixed z-50 max-w-[min(20rem,calc(100vw-1rem))] rounded-md border border-line bg-surface
+            px-2.5 py-2 text-xs leading-relaxed text-muted shadow-elev-3 aparecer pointer-events-none"
+        >
+          {texto}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -113,18 +239,48 @@ export function tramoScore(valor: number) {
   return { texto: "text-muted", fondo: "bg-faint", nivel: "bajo" };
 }
 
-/** Score como cifra central: número monoespaciado + micro-medidor por tramo. */
-export function ScoreCelda({ valor }: { valor: number | string | null | undefined }) {
-  if (valor === null || valor === undefined)
-    return <span className="cifra text-sm text-faint">—</span>;
+/** El medidor arranca vacío y se llena tras el primer pintado; después, cualquier
+ *  cambio de valor (cambiar de perfil, quitar el riesgo país) recorre la barra en
+ *  vez de saltar. Es lo único que se anima "despacio": comunica una magnitud. */
+function useAnchoMedidor(valor: number) {
+  const [ancho, setAncho] = useState(0);
+  useEffect(() => {
+    // `setTimeout` y no `requestAnimationFrame`: en una pestaña de fondo rAF no
+    // dispara, y la barra se quedaría a cero hasta que el usuario la mirase.
+    const t = setTimeout(() => setAncho(Math.max(3, Math.min(100, valor))), 16);
+    return () => clearTimeout(t);
+  }, [valor]);
+  return ancho;
+}
+
+/** Score como cifra dominante de su fila: es lo que se viene a leer, así que pesa
+ *  más que todo lo demás. `lg` en tarjeta móvil, `md` en la tabla, `sm` suelto. */
+export function ScoreCelda({
+  valor,
+  tamano = "md",
+}: {
+  valor: number | string | null | undefined;
+  tamano?: "sm" | "md" | "lg";
+}) {
   const n = Number(valor);
+  const vacio = valor === null || valor === undefined || Number.isNaN(n);
+  const ancho = useAnchoMedidor(vacio ? 0 : n);
+  if (vacio) return <span className="cifra text-sm text-faint">—</span>;
   const t = tramoScore(n);
+  const dim = {
+    sm: { num: "text-[15px]", barra: "w-9 h-1", hueco: "gap-2.5" },
+    md: { num: "text-[19px]", barra: "w-12 h-1.5", hueco: "gap-3" },
+    lg: { num: "text-[26px] leading-none", barra: "w-16 h-1.5", hueco: "gap-3" },
+  }[tamano];
   return (
-    <div className="flex items-center gap-2.5 justify-end">
-      <span className="h-1 w-9 rounded-full bg-line overflow-hidden">
-        <span className={`block h-full rounded-full ${t.fondo}`} style={{ width: `${Math.max(4, Math.min(100, n))}%` }} />
+    <div className={`flex items-center justify-end ${dim.hueco}`}>
+      <span className={`${dim.barra} rounded-full bg-line overflow-hidden shrink-0`}>
+        <span
+          className={`block h-full rounded-full ${t.fondo} transition-[width,background-color] duration-300 ease-sal`}
+          style={{ width: `${ancho}%` }}
+        />
       </span>
-      <span className={`cifra text-[15px] font-semibold ${t.texto}`}>{n.toFixed(1)}</span>
+      <span className={`cifra ${dim.num} font-semibold tracking-tight ${t.texto}`}>{n.toFixed(1)}</span>
     </div>
   );
 }
@@ -137,27 +293,28 @@ export function BadgeScore({ valor }: { valor: number | string | null | undefine
   return <span className={`cifra text-sm font-semibold ${tramoScore(n).texto}`}>{n.toFixed(1)}</span>;
 }
 
+/* --- Marcas del ranking ------------------------------------------------------
+   Tienen presencia (canto propio, mayúsculas, mono) pero ninguna compite con el
+   score: sin relleno saturado y a 10px. Todas explican por qué están ahí. ---- */
+
+const MARCA =
+  "inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide leading-none h-[18px] transition-colors duration-150";
+
 /** Discreto a propósito: en un ranking casi todo es provisional al arrancar, así que
  *  un badge saturado por fila taparía al score, que es lo que manda en la pantalla. */
 export function AvisoProvisional() {
   return (
-    <span
-      title="Calculado con parámetros provisionales (sin fuente validada)"
-      className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-warning/70 border border-warning/20"
-    >
-      PROV
-    </span>
+    <Pista texto="Calculado con parámetros provisionales (sin fuente validada).">
+      <span className={`${MARCA} text-warning/80 border border-warning/30 hover:bg-warning/10`}>PROV</span>
+    </Pista>
   );
 }
 
 export function BadgeDup() {
   return (
-    <span
-      title="Posible duplicado en otro portal"
-      className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted border border-line"
-    >
-      DUP
-    </span>
+    <Pista texto="Posible duplicado del mismo inmueble en otro portal (ciudad + precio ±5% + m² ±5%). Solo se marca, nunca se fusiona.">
+      <span className={`${MARCA} text-muted border border-line hover:bg-elevated`}>DUP</span>
+    </Pista>
   );
 }
 
@@ -165,12 +322,22 @@ export function BadgeDup() {
  *  score de cashflow no es representativo (plusvalía / corta estancia). */
 export function BadgeTuristica() {
   return (
-    <span
-      title="Zona turística: el score de cashflow (larga estancia, apalancado) no es representativo aquí. La inversión es de plusvalía / alquiler de corta estancia."
-      className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent border border-accent/40"
+    <Pista texto="Zona turística: el score de cashflow (larga estancia, apalancado) no es representativo aquí. La inversión es de plusvalía / alquiler de corta estancia.">
+      <span className={`${MARCA} text-accent border border-accent/40 hover:bg-accent/10`}>TURÍSTICA</span>
+    </Pista>
+  );
+}
+
+/** Marca de ranking: el score ignoró señales que el catálogo del país no contempla. */
+export function BadgeSenalIgnorada({ pais }: { pais?: string | null }) {
+  return (
+    <Pista
+      texto={`El analista emitió señales que el catálogo de ${pais || "este país"} no contempla. No se aplicaron al score: ni descarte duro ni penalización. El score puede estar infra-penalizado.`}
     >
-      TURÍSTICA
-    </span>
+      <span className={`${MARCA} text-danger border border-danger/40 bg-danger/10 hover:bg-danger/20`}>
+        SEÑAL IGNORADA
+      </span>
+    </Pista>
   );
 }
 
@@ -220,11 +387,17 @@ export function Interruptor({
       aria-checked={activo}
       title={title}
       onClick={() => onCambiar(!activo)}
-      className="inline-flex items-center gap-2.5 text-sm md:text-[13px] text-muted hover:text-fg transition select-none min-h-[44px] md:min-h-0 py-2 md:py-0"
+      className="inline-flex items-center gap-2.5 text-sm lg:text-[13px] text-muted hover:text-fg transition select-none min-h-[44px] lg:min-h-0 py-2 lg:py-0"
     >
-      <span className={`relative h-4 w-7 rounded-full transition-colors ${activo ? "bg-accent" : "bg-line"}`}>
+      <span
+        className={`relative h-4 w-7 rounded-full transition-colors duration-200 ${
+          activo ? "bg-accent" : "bg-line"
+        }`}
+      >
         <span
-          className={`absolute top-0.5 h-3 w-3 rounded-full bg-[hsl(210_40%_98%)] shadow-sm transition-all ${activo ? "left-3.5" : "left-0.5"}`}
+          className={`absolute top-0.5 h-3 w-3 rounded-full bg-[hsl(210_40%_98%)] shadow-elev-1 transition-[left] duration-200 ease-sal ${
+            activo ? "left-3.5" : "left-0.5"
+          }`}
         />
       </span>
       {etiqueta}
@@ -232,8 +405,148 @@ export function Interruptor({
   );
 }
 
-export function Vacio({ children }: { children: ReactNode }) {
-  return <div className="text-sm text-faint py-8 text-center">{children}</div>;
+/* --- Huecos y esperas -------------------------------------------------------- */
+
+/** Un hueco no es un vacío: dice qué falta y qué hacer con ello. */
+export function Vacio({
+  children,
+  titulo,
+  accion,
+}: {
+  children?: ReactNode;
+  titulo?: string;
+  accion?: ReactNode;
+}) {
+  return (
+    <div className="aparecer flex flex-col items-center gap-2 py-10 px-4 text-center">
+      <svg
+        width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round"
+        className="text-faint/60" aria-hidden
+      >
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <path d="M3 9h18" />
+        <path d="M8 14h8" strokeDasharray="2 3" />
+      </svg>
+      {titulo && <p className="text-[13px] font-medium text-muted">{titulo}</p>}
+      {children && <p className="text-[13px] text-faint max-w-sm leading-relaxed">{children}</p>}
+      {accion && <div className="mt-1">{accion}</div>}
+    </div>
+  );
+}
+
+/** Bloque gris que insinúa la forma de lo que va a llegar. */
+export function Esqueleto({ className = "" }: { className?: string }) {
+  return <span className={`esqueleto block ${className}`} aria-hidden />;
+}
+
+/** Silueta del ranking: mismas alturas que la fila real, así no salta al llegar. */
+export function EsqueletoRanking({ filas = 8 }: { filas?: number }) {
+  return (
+    <div aria-busy="true" aria-label="Cargando ranking">
+      <div className="lg:hidden space-y-2">
+        {Array.from({ length: filas }).map((_, i) => (
+          <div key={i} className="rounded-lg border border-line bg-elevated/30 p-3 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <Esqueleto className="h-3 w-6" />
+              <Esqueleto className="h-6 w-24" />
+            </div>
+            <Esqueleto className="h-4 w-3/4" />
+            <Esqueleto className="h-3 w-1/3" />
+            <div className="flex justify-between pt-2 border-t border-line/70">
+              <Esqueleto className="h-4 w-24" />
+              <Esqueleto className="h-4 w-14" />
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="hidden lg:block space-y-px">
+        {Array.from({ length: filas }).map((_, i) => (
+          <div key={i} className="flex items-center gap-4 h-[41px] border-b border-line/70 px-3">
+            <Esqueleto className="h-3 w-4" />
+            <Esqueleto className="h-4 w-28" />
+            <Esqueleto className="h-4 flex-1 max-w-sm" />
+            <Esqueleto className="h-4 w-24" />
+            <Esqueleto className="h-4 w-12" />
+            <Esqueleto className="h-3 w-20" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Silueta de la ficha: cabecera, tres tarjetas, dos gráficos. */
+export function EsqueletoFicha() {
+  return (
+    <div className="space-y-5" aria-busy="true" aria-label="Cargando ficha">
+      <div className="space-y-2">
+        <Esqueleto className="h-6 w-2/3 max-w-md" />
+        <Esqueleto className="h-4 w-40" />
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="rounded-lg border border-line bg-surface shadow-elev-1 overflow-hidden">
+            <div className="h-11 border-b border-line flex items-center px-4">
+              <Esqueleto className="h-3.5 w-28" />
+            </div>
+            <div className="p-4 space-y-3">
+              {[0, 1, 2, 3, 4].map((j) => (
+                <div key={j} className="flex justify-between gap-6">
+                  <Esqueleto className="h-3.5 w-24" />
+                  <Esqueleto className="h-3.5 w-16" />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {[0, 1].map((i) => (
+          <div key={i} className="rounded-lg border border-line bg-surface shadow-elev-1 overflow-hidden">
+            <div className="h-11 border-b border-line flex items-center px-4">
+              <Esqueleto className="h-3.5 w-36" />
+            </div>
+            <div className="p-4">
+              <Esqueleto className="h-[190px] w-full" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* --- Avisos ------------------------------------------------------------------ */
+
+/** Confirmación o error de una acción. Entra con un desplazamiento corto para que
+ *  se note que ha ocurrido algo, y se va sola: no deja poso en la pantalla. */
+export function Aviso({
+  children,
+  tono = "positive",
+  alCerrar,
+  msSalida = 6000,
+}: {
+  children: ReactNode;
+  tono?: "positive" | "warning" | "danger";
+  alCerrar?: () => void;
+  msSalida?: number;
+}) {
+  useEffect(() => {
+    if (!alCerrar || !msSalida) return;
+    const t = setTimeout(alCerrar, msSalida);
+    return () => clearTimeout(t);
+  }, [alCerrar, msSalida, children]);
+  const tonos = {
+    positive: "text-positive bg-positive/10 border-positive/30",
+    warning: "text-warning bg-warning/10 border-warning/30",
+    danger: "text-danger bg-danger/10 border-danger/30",
+  }[tono];
+  return (
+    <div role="status" className={`aparecer text-[13px] border rounded-md px-3 py-2 shadow-elev-1 ${tonos}`}>
+      {children}
+    </div>
+  );
 }
 
 export function IconoAviso({ className = "" }: { className?: string }) {
@@ -256,18 +569,6 @@ export function AvisoRiesgo({ children }: { children: ReactNode }) {
       <IconoAviso className="mt-0.5" />
       <span>{children}</span>
     </div>
-  );
-}
-
-/** Marca de ranking: el score ignoró señales que el catálogo del país no contempla. */
-export function BadgeSenalIgnorada({ pais }: { pais?: string | null }) {
-  return (
-    <span
-      title={`El analista emitió señales que el catálogo de ${pais || "este país"} no contempla. No se aplicaron al score: ni descarte duro ni penalización. El score puede estar infra-penalizado.`}
-      className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-danger border border-danger/40 bg-danger/10"
-    >
-      SEÑAL IGNORADA
-    </span>
   );
 }
 

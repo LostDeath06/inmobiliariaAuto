@@ -123,6 +123,10 @@ services:
       # Quien exige la contraseña es el arranque del contenedor
       # (docker-entrypoint-auth.sh), que falla si viene vacía.
       APP_PASSWORD: ${APP_PASSWORD:-}
+      # Credencial de solo lectura para el bot de consulta (OpenClaw/Telegram).
+      # Opcional: si va vacía, /api-lectura/ queda deshabilitada.
+      CONSULTA_USUARIO: ${CONSULTA_USUARIO:-consulta}
+      CONSULTA_PASSWORD: ${CONSULTA_PASSWORD:-}
     ports:
       - "${PUERTO_HTTP:-80}:80"
     depends_on:

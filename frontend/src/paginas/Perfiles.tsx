@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { Boton, Card, Vacio } from "../ui";
+import { Aviso, Boton, Card, Esqueleto } from "../ui";
 
 export default function Perfiles() {
   const [perfiles, setPerfiles] = useState<any[]>([]);
@@ -8,6 +8,8 @@ export default function Perfiles() {
   const [pesos, setPesos] = useState<Record<string, number>>({});
   const [supuestos, setSupuestos] = useState<Record<string, number>>({});
   const [aviso, setAviso] = useState("");
+  const [guardando, setGuardando] = useState(false);
+  const [recalculando, setRecalculando] = useState(false);
 
   const cargar = () => api.get("/api/perfiles").then((p) => {
     setPerfiles(p);
@@ -26,17 +28,27 @@ export default function Perfiles() {
   const sumaOk = Math.abs(suma - 1) < 0.001;
 
   const guardar = async () => {
-    const r = await api.put(`/api/perfiles/${sel.id}`, { pesos, supuestos });
-    setAviso(`Guardado. ${r.scores_marcados_obsoletos} scores marcados obsoletos: recalcula para verlos.`);
-    cargar();
+    setGuardando(true);
+    try {
+      const r = await api.put(`/api/perfiles/${sel.id}`, { pesos, supuestos });
+      setAviso(`Guardado. ${r.scores_marcados_obsoletos} scores marcados obsoletos: recalcula para verlos.`);
+      cargar();
+    } finally {
+      setGuardando(false);
+    }
   };
 
   const recalcular = async () => {
-    await api.post(`/api/pipeline/recalcular-todo?perfil_id=${sel.id}`);
-    setAviso("Recálculo lanzado.");
+    setRecalculando(true);
+    try {
+      await api.post(`/api/pipeline/recalcular-todo?perfil_id=${sel.id}`);
+      setAviso("Recálculo lanzado.");
+    } finally {
+      setRecalculando(false);
+    }
   };
 
-  if (!sel) return <Vacio>Cargando…</Vacio>;
+  if (!sel) return <EsqueletoPerfiles />;
 
   return (
     <div className="space-y-4">
@@ -46,8 +58,11 @@ export default function Perfiles() {
           <button
             key={p.id}
             onClick={() => elegir(p)}
-            className={`shrink-0 px-3 min-h-[44px] md:min-h-0 md:py-1.5 rounded-md text-sm md:text-[13px] font-medium transition ${
-              sel.id === p.id ? "bg-elevated text-fg border border-line" : "text-muted hover:text-fg hover:bg-elevated/60"
+            className={`shrink-0 px-3 min-h-[44px] lg:min-h-0 lg:py-1.5 rounded-md text-sm lg:text-[13px] font-medium
+              transition-[background-color,color,border-color,box-shadow] duration-150 ${
+              sel.id === p.id
+                ? "bg-elevated text-fg border border-line shadow-elev-1"
+                : "text-muted hover:text-fg hover:bg-elevated/60"
             }`}
           >
             {p.nombre}
@@ -75,7 +90,13 @@ export default function Perfiles() {
                 <span className="hidden md:block w-12 text-right cifra text-sm text-fg">{(pesos[k] * 100).toFixed(0)}%</span>
               </div>
             ))}
-            <div className={`text-[13px] font-medium pt-1 ${sumaOk ? "text-positive" : "text-danger"}`}>
+            {/* La suma cambia de color en cuanto deja de cuadrar: no hay que buscar
+                el error, se ve mientras se arrastra el slider. */}
+            <div
+              className={`text-[13px] font-medium pt-1 transition-colors duration-200 ${
+                sumaOk ? "text-positive" : "text-danger"
+              }`}
+            >
               Suma: <span className="cifra">{(suma * 100).toFixed(0)}%</span>{sumaOk ? "" : " · debe ser 100%"}
             </div>
           </div>
@@ -98,11 +119,44 @@ export default function Perfiles() {
         </Card>
       </div>
 
-      {aviso && <div className="text-[13px] text-warning bg-warning/10 border border-warning/30 rounded-md px-3 py-2">{aviso}</div>}
+      {aviso && <Aviso tono="warning" alCerrar={() => setAviso("")}>{aviso}</Aviso>}
 
       <div className="flex flex-col sm:flex-row gap-2">
-        <Boton className="w-full sm:w-auto" onClick={guardar}>Guardar</Boton>
-        <Boton className="w-full sm:w-auto" variante="secundario" onClick={recalcular}>Recalcular scores del perfil</Boton>
+        <Boton className="w-full sm:w-auto" cargando={guardando} onClick={guardar}>
+          {guardando ? "Guardando" : "Guardar"}
+        </Boton>
+        <Boton className="w-full sm:w-auto" variante="secundario" cargando={recalculando} onClick={recalcular}>
+          {recalculando ? "Recalculando" : "Recalcular scores del perfil"}
+        </Boton>
+      </div>
+    </div>
+  );
+}
+
+function EsqueletoPerfiles() {
+  return (
+    <div className="space-y-4" aria-busy="true" aria-label="Cargando perfiles">
+      <div className="flex gap-1.5">
+        <Esqueleto className="h-9 w-44" />
+        <Esqueleto className="h-9 w-44" />
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {[0, 1].map((i) => (
+          <div key={i} className="rounded-lg border border-line bg-surface shadow-elev-1 overflow-hidden">
+            <div className="h-11 border-b border-line flex items-center px-4">
+              <Esqueleto className="h-3.5 w-32" />
+            </div>
+            <div className="p-4 space-y-4">
+              {[0, 1, 2, 3, 4, 5, 6].map((j) => (
+                <div key={j} className="flex items-center gap-3">
+                  <Esqueleto className="h-3.5 w-40 shrink-0" />
+                  <Esqueleto className="h-1.5 flex-1" />
+                  <Esqueleto className="h-3.5 w-9 shrink-0" />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

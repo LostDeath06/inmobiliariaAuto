@@ -1,28 +1,46 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
-  Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { api } from "../api";
 import { coloresGrafico, useTema } from "../tema";
-import { AvisoProvisional, BadgeCalidad, BadgeScore, Boton, Card, Chip, IconoAviso, Vacio, fmtDinero, fmtMetrica, useEsMovil } from "../ui";
+import {
+  Aviso, AvisoProvisional, BadgeCalidad, BadgeScore, Boton, Card, Chip, EsqueletoFicha,
+  IconoAviso, Vacio, fmtDinero, fmtMetrica, paso, useEsMovil,
+} from "../ui";
 
 export default function Ficha() {
   const { id } = useParams();
   const [datos, setDatos] = useState<any>(null);
   const [perfiles, setPerfiles] = useState<Record<string, string>>({});
+  const [recalculando, setRecalculando] = useState(false);
+  const [aviso, setAviso] = useState("");
   const [error, setError] = useState("");
 
   const cargar = () => api.get(`/api/inmuebles/${id}`).then(setDatos).catch((e) => setError(String(e)));
-  useEffect(() => { cargar(); }, [id]);
+  useEffect(() => { setDatos(null); cargar(); }, [id]);
   useEffect(() => {
     api.get("/api/perfiles").then((ps: any[]) =>
       setPerfiles(Object.fromEntries(ps.map((p) => [p.id, p.nombre]))),
     ).catch(() => {});
   }, []);
 
-  if (error) return <div className="text-sm text-danger bg-danger/10 border border-danger/30 rounded-md px-3 py-2">{error}</div>;
-  if (!datos) return <Vacio>Cargando…</Vacio>;
+  const recalcular = async () => {
+    setRecalculando(true);
+    try {
+      await api.post(`/api/inmuebles/${id}/recalcular`);
+      await cargar();
+      setAviso("Recalculado con la configuración de mercado actual.");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRecalculando(false);
+    }
+  };
+
+  if (error) return <div className="aparecer text-sm text-danger bg-danger/10 border border-danger/30 rounded-md px-3 py-2 shadow-elev-1">{error}</div>;
+  if (!datos) return <EsqueletoFicha />;
 
   const { inmueble, metricas, analisis, scores, historico_precios, zona } = datos;
   const noReconocidas: string[] = analisis?.senales_no_reconocidas || [];
@@ -30,7 +48,7 @@ export default function Ficha() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4">
+      <div className="aparecer flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4">
         <div className="min-w-0">
           <h1 className="text-base sm:text-lg font-semibold text-fg tracking-tight leading-snug">
             {inmueble.titulo || "(sin título)"}
@@ -45,15 +63,17 @@ export default function Ficha() {
             <Boton variante="secundario" className="w-full sm:w-auto">Ver anuncio</Boton>
           </a>
           <div className="flex-1 sm:flex-none">
-            <Boton className="w-full sm:w-auto" onClick={() => api.post(`/api/inmuebles/${id}/recalcular`).then(cargar)}>
-              Recalcular
+            <Boton className="w-full sm:w-auto" cargando={recalculando} onClick={recalcular}>
+              {recalculando ? "Recalculando" : "Recalcular"}
             </Boton>
           </div>
         </div>
       </div>
 
+      {aviso && <Aviso alCerrar={() => setAviso("")}>{aviso}</Aviso>}
+
       {zonaTuristica && (
-        <div className="rounded-lg border border-accent/40 bg-accent/10 px-4 py-3">
+        <div className="aparecer rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 shadow-elev-1">
           <div className="flex items-center gap-2 text-accent text-[13px] font-semibold uppercase tracking-wide">
             <IconoAviso /> Zona turística — el score de cashflow no es representativo aquí
           </div>
@@ -69,7 +89,7 @@ export default function Ficha() {
       )}
 
       {noReconocidas.length > 0 && (
-        <div className="rounded-lg border border-danger/40 bg-danger/10 px-4 py-3">
+        <div className="aparecer rounded-lg border border-danger/40 bg-danger/10 px-4 py-3 shadow-elev-1">
           <div className="flex items-center gap-2 text-danger text-[13px] font-semibold uppercase tracking-wide">
             <IconoAviso /> Señales fuera del catálogo de {inmueble.pais || "el país"}
           </div>
@@ -84,105 +104,119 @@ export default function Ficha() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
-        <Card titulo="Datos">
-          <dl className="text-sm divide-y divide-line/70">
-            <Dato k="Precio" v={<span className="cifra text-fg">{fmtDinero(inmueble.precio, inmueble.moneda)}</span>} />
-            <Dato k="Superficie útil" v={<span className="cifra">{inmueble.superficie_util_m2 ? `${inmueble.superficie_util_m2} m²` : "—"}</span>} />
-            <Dato k="Superficie construida" v={<span className="cifra">{inmueble.superficie_construida_m2 ? `${inmueble.superficie_construida_m2} m²` : "—"}</span>} />
-            <Dato k="Habitaciones" v={<span className="cifra">{inmueble.habitaciones ?? "—"}</span>} />
-            <Dato k="Tipo anunciante" v={inmueble.tipo_anunciante || "—"} />
-            <Dato k="Calidad del dato" v={<BadgeCalidad estado={inmueble.estado_calidad} />} />
-          </dl>
-          {inmueble.posible_duplicado_cross_portal && (
-            <p className="text-xs text-muted mt-3">Marcado como posible duplicado en otro portal.</p>
-          )}
-        </Card>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start escalonado">
+        <div {...paso(0)}>
+          <Card titulo="Datos">
+            <dl className="text-sm divide-y divide-line/70">
+              <Dato k="Precio" v={<span className="cifra text-fg">{fmtDinero(inmueble.precio, inmueble.moneda)}</span>} />
+              <Dato k="Superficie útil" v={<span className="cifra">{inmueble.superficie_util_m2 ? `${inmueble.superficie_util_m2} m²` : "—"}</span>} />
+              <Dato k="Superficie construida" v={<span className="cifra">{inmueble.superficie_construida_m2 ? `${inmueble.superficie_construida_m2} m²` : "—"}</span>} />
+              <Dato k="Habitaciones" v={<span className="cifra">{inmueble.habitaciones ?? "—"}</span>} />
+              <Dato k="Tipo anunciante" v={inmueble.tipo_anunciante || "—"} />
+              <Dato k="Calidad del dato" v={<BadgeCalidad estado={inmueble.estado_calidad} />} />
+            </dl>
+            {inmueble.posible_duplicado_cross_portal && (
+              <p className="text-xs text-muted mt-3">Marcado como posible duplicado en otro portal.</p>
+            )}
+          </Card>
+        </div>
 
-        <Card titulo="Score por perfil" subtitulo="cashflow vs. plusvalía">
-          <div className="divide-y divide-line/70">
-            {scores.map((s: any) => (
-              <div key={s.perfil_id} className="py-2.5 first:pt-0 last:pb-0 space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-[13px] text-fg truncate">
-                    {perfiles[s.perfil_id] || String(s.perfil_id).slice(0, 8)}
-                  </span>
-                  {s.usa_parametros_provisionales && <AvisoProvisional />}
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <BadgeCalidad estado={s.estado_calidad} />
-                  <div className="flex items-baseline gap-4">
-                    <span className="text-[11px] uppercase tracking-wide text-faint">
-                      bruto <BadgeScore valor={s.score_bruto} />
+        <div {...paso(1)}>
+          <Card titulo="Score por perfil" subtitulo="cashflow vs. plusvalía">
+            <div className="divide-y divide-line/70">
+              {scores.map((s: any) => (
+                <div key={s.perfil_id} className="py-2.5 first:pt-0 last:pb-0 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[13px] text-fg truncate">
+                      {perfiles[s.perfil_id] || String(s.perfil_id).slice(0, 8)}
                     </span>
-                    <span className="text-[11px] uppercase tracking-wide text-faint">
-                      total <BadgeScore valor={s.score_total} />
-                    </span>
+                    {s.usa_parametros_provisionales && <AvisoProvisional />}
                   </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <BadgeCalidad estado={s.estado_calidad} />
+                    <div className="flex items-baseline gap-4">
+                      <span className="text-[11px] uppercase tracking-wide text-faint">
+                        bruto <BadgeScore valor={s.score_bruto} />
+                      </span>
+                      <span className="text-[11px] uppercase tracking-wide text-faint">
+                        total <BadgeScore valor={s.score_total} />
+                      </span>
+                    </div>
+                  </div>
+                  {s.motivo_descarte?.length > 0 && (
+                    <div className="text-xs text-danger">Descartado por: {s.motivo_descarte.join(", ")}</div>
+                  )}
                 </div>
-                {s.motivo_descarte?.length > 0 && (
-                  <div className="text-xs text-danger">Descartado por: {s.motivo_descarte.join(", ")}</div>
-                )}
-              </div>
-            ))}
-            {scores.length === 0 && <Vacio>Sin scores</Vacio>}
-          </div>
-        </Card>
-
-        <Card titulo="Análisis cualitativo" subtitulo="Claude · solo juicio, cero cifras">
-          {analisis ? (
-            <div className="space-y-3">
-              <dl className="text-sm divide-y divide-line/70">
-                <Dato k="Estado" v={analisis.estado_conservacion} />
-                <Dato k="Reforma estimada" v={analisis.nivel_reforma_estimado} />
-                <Dato k="Tipología" v={analisis.tipologia} />
-                <Dato k="Apto alquiler larga" v={analisis.apto_alquiler_larga_estancia} />
-                <Dato k="Confianza" v={analisis.nivel_confianza} />
-              </dl>
-              <Senales titulo="Riesgos" codigos={analisis.senales_riesgo} tono="danger" />
-              <Senales titulo="Oportunidades" codigos={analisis.senales_oportunidad} tono="positive" />
-              {analisis.resumen_analista && (
-                <p className="text-[13px] text-muted leading-relaxed border-l-2 border-line pl-3">{analisis.resumen_analista}</p>
+              ))}
+              {scores.length === 0 && (
+                <Vacio titulo="Sin scores">
+                  Este inmueble no se ha puntuado todavía. Pulsa «Recalcular» arriba.
+                </Vacio>
               )}
             </div>
-          ) : <Vacio>Sin análisis (pendiente o fallido)</Vacio>}
-        </Card>
-      </div>
+          </Card>
+        </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-        <Card titulo="Desglose del score" subtitulo="contribución de cada componente">
-          {scores[0]?.desglose?.componentes ? (
-            <DesgloseChart desglose={scores[0].desglose} />
-          ) : <Vacio>Sin desglose disponible</Vacio>}
-        </Card>
-
-        <Card titulo="Histórico de precios" subtitulo="moneda nativa del anuncio">
-          {historico_precios?.length >= 2 ? (
-            <HistoricoChart puntos={historico_precios} moneda={inmueble.moneda} />
-          ) : <Vacio>Un solo punto de precio: sin serie todavía.</Vacio>}
-        </Card>
-      </div>
-
-      <Card titulo="Métricas financieras" subtitulo="motor determinista · mantén pulsada una cifra para ver su fórmula e inputs">
-        {metricas ? (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 md:gap-2.5">
-            {Object.entries(metricas.metricas || {}).map(([k, v]) => (
-              <div
-                key={k}
-                className="border border-line rounded-md p-2.5 bg-elevated/40 hover:border-muted/40 transition cursor-help"
-                title={`valor exacto: ${v}\n\n${JSON.stringify(metricas.inputs_auditoria?.[k] || {}, null, 2)}`}
-              >
-                <div className="text-[11px] text-faint uppercase tracking-wide truncate">{k}</div>
-                <div className="cifra text-[15px] text-fg mt-0.5">{fmtMetrica(v)}</div>
+        <div {...paso(2)}>
+          <Card titulo="Análisis cualitativo" subtitulo="Claude · solo juicio, cero cifras">
+            {analisis ? (
+              <div className="space-y-3">
+                <dl className="text-sm divide-y divide-line/70">
+                  <Dato k="Estado" v={analisis.estado_conservacion} />
+                  <Dato k="Reforma estimada" v={analisis.nivel_reforma_estimado} />
+                  <Dato k="Tipología" v={analisis.tipologia} />
+                  <Dato k="Apto alquiler larga" v={analisis.apto_alquiler_larga_estancia} />
+                  <Dato k="Confianza" v={analisis.nivel_confianza} />
+                </dl>
+                <Senales titulo="Riesgos" codigos={analisis.senales_riesgo} tono="danger" />
+                <Senales titulo="Oportunidades" codigos={analisis.senales_oportunidad} tono="positive" />
+                {analisis.resumen_analista && (
+                  <p className="text-[13px] text-muted leading-relaxed border-l-2 border-line pl-3">{analisis.resumen_analista}</p>
+                )}
               </div>
-            ))}
-            {metricas.conversion_parcial && (
-              <div className="col-span-full text-xs text-warning">
-                Conversión a moneda de referencia incompleta (falta un tipo de cambio).
-              </div>
+            ) : (
+              <Vacio titulo="Sin análisis">
+                El análisis cualitativo está pendiente o falló. Recalcular vuelve a pedírselo a Claude.
+              </Vacio>
             )}
-          </div>
-        ) : <Vacio>Sin métricas</Vacio>}
+          </Card>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start escalonado">
+        <div {...paso(3)}>
+          <Card titulo="Desglose del score" subtitulo="contribución de cada componente">
+            {scores[0]?.desglose?.componentes ? (
+              <DesgloseChart desglose={scores[0].desglose} />
+            ) : (
+              <Vacio titulo="Sin desglose disponible">
+                El desglose aparece cuando el motor puntúa el inmueble con una configuración de mercado cargada.
+              </Vacio>
+            )}
+          </Card>
+        </div>
+
+        <div {...paso(4)}>
+          <Card titulo="Histórico de precios" subtitulo="moneda nativa del anuncio">
+            {historico_precios?.length >= 2 ? (
+              <HistoricoChart puntos={historico_precios} moneda={inmueble.moneda} />
+            ) : (
+              <Vacio titulo="Un solo punto de precio">
+                La serie aparece cuando el anuncio se vuelve a leer con otro precio. Aún no hay con qué comparar.
+              </Vacio>
+            )}
+          </Card>
+        </div>
+      </div>
+
+      <Card titulo="Métricas financieras" subtitulo="motor determinista · pulsa una cifra para ver su fórmula e inputs">
+        {metricas ? (
+          <PanelMetricas metricas={metricas} />
+        ) : (
+          <Vacio titulo="Sin métricas">
+            El motor financiero no ha podido calcular nada: falta configuración de mercado del país.
+          </Vacio>
+        )}
       </Card>
     </div>
   );
@@ -210,6 +244,98 @@ function Senales({ titulo, codigos, tono }: { titulo: string; codigos?: string[]
   );
 }
 
+/** Auditoría de cifra pulsable. El `title` nativo no existe en táctil (§11.7): en un
+ *  móvil la trazabilidad del número era inalcanzable. Ahora se abre un panel. */
+function PanelMetricas({ metricas }: { metricas: any }) {
+  const [sel, setSel] = useState<string | null>(null);
+  const entradas = Object.entries(metricas.metricas || {});
+  const auditoria = sel ? metricas.inputs_auditoria?.[sel] : null;
+
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 md:gap-2.5">
+      {entradas.map(([k, v]) => {
+        const activa = sel === k;
+        return (
+          <button
+            key={k}
+            type="button"
+            onClick={() => setSel(activa ? null : k)}
+            aria-expanded={activa}
+            className={`text-left border rounded-md p-2.5 min-h-[56px] shadow-elev-1
+              transition-[border-color,background-color,box-shadow,transform] duration-150 active:translate-y-px ${
+              activa
+                ? "border-accent/60 bg-accent/10"
+                : "border-line bg-elevated/40 hover:border-muted/40 hover:shadow-elev-2"
+            }`}
+          >
+            <div className="text-[11px] text-faint uppercase tracking-wide truncate">{k}</div>
+            <div className="cifra text-[15px] text-fg mt-0.5">{fmtMetrica(v)}</div>
+          </button>
+        );
+      })}
+
+      {sel && (
+        <div className="col-span-full aparecer rounded-md border border-accent/40 bg-elevated/60 p-3 shadow-elev-1">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[11px] uppercase tracking-wider text-accent">{sel}</div>
+              <div className="cifra text-sm text-fg mt-1 break-all">
+                valor exacto: {String(metricas.metricas?.[sel])}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSel(null)}
+              aria-label="Cerrar auditoría"
+              className="shrink-0 h-8 w-8 -mt-1 -mr-1 inline-flex items-center justify-center rounded-md text-muted hover:text-fg hover:bg-elevated transition"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          {auditoria && Object.keys(auditoria).length > 0 ? (
+            <dl className="mt-2.5 text-xs divide-y divide-line/70 border-t border-line/70">
+              {Object.entries(auditoria).map(([k, v]) => (
+                <div key={k} className="flex justify-between gap-4 py-1.5">
+                  <dt className="text-muted shrink-0">{k}</dt>
+                  <dd className="cifra text-fg text-right break-all">{String(v)}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : (
+            <p className="mt-2 text-xs text-faint">Sin inputs de auditoría registrados para esta métrica.</p>
+          )}
+        </div>
+      )}
+
+      {metricas.conversion_parcial && (
+        <div className="col-span-full text-xs text-warning">
+          Conversión a moneda de referencia incompleta (falta un tipo de cambio).
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Tooltip de gráfico: mismo objeto flotante que el resto de la app (elevación 3,
+ *  cifra en monoespaciada). El de serie de recharts es genérico y desentona. */
+function TooltipSobrio({
+  active, payload, label, formato,
+}: any) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="rounded-md border border-line bg-surface px-2.5 py-2 shadow-elev-3">
+      <div className="text-[11px] uppercase tracking-wider text-faint">{label}</div>
+      {payload.map((p: any) => (
+        <div key={p.dataKey} className="cifra text-[13px] text-fg mt-0.5">
+          {formato ? formato(p.value) : p.value}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function DesgloseChart({ desglose }: { desglose: any }) {
   const { tema } = useTema();
   const esMovil = useEsMovil();
@@ -221,6 +347,9 @@ function DesgloseChart({ desglose }: { desglose: any }) {
         .map(([nombre, x]: any) => ({ nombre, contribucion: Number(x.contribucion || 0) })),
     [desglose],
   );
+  // Jerarquía dentro del gráfico: el componente que más aporta al score va en el
+  // acento pleno y el resto en su versión tenue. Sin leyenda: se lee solo.
+  const maxima = Math.max(...datos.map((d) => d.contribucion), 0);
   // En móvil los nombres de componente (rentabilidad_neta…) no caben en 132px:
   // se recorta el eje y se acorta la etiqueta, o el gráfico se come el ancho.
   const anchoEje = esMovil ? 92 : 132;
@@ -241,10 +370,19 @@ function DesgloseChart({ desglose }: { desglose: any }) {
         />
         <Tooltip
           cursor={{ fill: c.grid, opacity: 0.4 }}
-          contentStyle={{ background: c.superficie, border: `1px solid ${c.grid}`, borderRadius: 8, fontSize: 12, color: c.etiqueta }}
-          labelStyle={{ color: c.etiqueta }}
+          content={<TooltipSobrio formato={(v: number) => `${Number(v).toFixed(2)} pts`} />}
         />
-        <Bar dataKey="contribucion" fill={c.barra} radius={[0, 3, 3, 0]} barSize={esMovil ? 13 : 16} />
+        <Bar
+          dataKey="contribucion"
+          radius={[0, 3, 3, 0]}
+          barSize={esMovil ? 13 : 16}
+          animationDuration={450}
+          animationEasing="ease-out"
+        >
+          {datos.map((d) => (
+            <Cell key={d.nombre} fill={d.contribucion === maxima ? c.barra : c.barraTenue} />
+          ))}
+        </Bar>
       </BarChart>
     </ResponsiveContainer>
   );
@@ -277,13 +415,20 @@ function HistoricoChart({ puntos, moneda }: { puntos: any[]; moneda?: string }) 
               : Number(v).toLocaleString("es-ES", { maximumFractionDigits: 0 })
           } />
         <Tooltip
-          contentStyle={{ background: c.superficie, border: `1px solid ${c.grid}`, borderRadius: 8, fontSize: 12, color: c.etiqueta }}
-          labelStyle={{ color: c.etiqueta }}
-          formatter={(v: any) => [`${Number(v).toLocaleString("es-ES")} ${moneda || ""}`.trim(), "Precio"]}
+          cursor={{ stroke: c.grid, strokeWidth: 1 }}
+          content={<TooltipSobrio formato={(v: number) => `${Number(v).toLocaleString("es-ES")} ${moneda || ""}`.trim()} />}
         />
-        <Line type="monotone" dataKey="precio" stroke={c.linea} strokeWidth={2} dot={{ r: 2.5, fill: c.linea }} activeDot={{ r: 4 }} />
+        <Line
+          type="monotone"
+          dataKey="precio"
+          stroke={c.linea}
+          strokeWidth={2}
+          dot={{ r: 2.5, fill: c.linea }}
+          activeDot={{ r: 4 }}
+          animationDuration={500}
+          animationEasing="ease-out"
+        />
       </LineChart>
     </ResponsiveContainer>
   );
 }
-

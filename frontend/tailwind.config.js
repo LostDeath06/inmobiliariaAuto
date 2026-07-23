@@ -43,8 +43,19 @@ export default {
       borderColor: {
         DEFAULT: "hsl(var(--line) / <alpha-value>)",
       },
+      // Elevación por capas (ver index.css). Reposo → hover → flotante.
+      boxShadow: {
+        "elev-1": "var(--sombra-1)",
+        "elev-2": "var(--sombra-2)",
+        "elev-3": "var(--sombra-3)",
+      },
       transitionDuration: {
         DEFAULT: "150ms",
+      },
+      // Todo sale con la misma curva: arranca rápido y frena. Nunca rebota.
+      transitionTimingFunction: {
+        DEFAULT: "cubic-bezier(0.2, 0, 0, 1)",
+        sal: "cubic-bezier(0.2, 0, 0, 1)",
       },
     },
   },

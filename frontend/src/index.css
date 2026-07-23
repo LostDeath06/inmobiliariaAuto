@@ -7,6 +7,10 @@
    Oscuro por defecto (carbón, no negro puro). Jerarquía por niveles de gris,
    un único acento frío, estados semánticos de baja saturación. Sin adornos.
    Los colores son variables CSS en canales HSL "H S% L%" para permitir opacidad.
+
+   La profundidad se consigue con elevación (sombras muy suaves + una línea de
+   realce superior de 1px), nunca con brillos ni gradientes: en un tema oscuro
+   una sombra sola casi no se ve, y el realce es lo que da el canto del objeto.
    ========================================================================== */
 
 :root {
@@ -24,6 +28,14 @@
   --warning: 32 82% 40%;
   --danger: 4 68% 46%;
   color-scheme: light;
+
+  /* Elevación por capas: reposo, elevado (hover), flotante (popover). */
+  --sombra-1: 0 1px 2px hsl(220 24% 40% / 0.08), 0 1px 3px hsl(220 24% 40% / 0.06);
+  --sombra-2: 0 2px 4px hsl(220 24% 40% / 0.07), 0 6px 14px -4px hsl(220 24% 40% / 0.12);
+  --sombra-3: 0 2px 6px hsl(220 24% 40% / 0.08), 0 12px 32px -8px hsl(220 24% 40% / 0.2);
+
+  /* Curva única de salida. Todo entra rápido y frena; nada rebota. */
+  --sal: cubic-bezier(0.2, 0, 0, 1);
 }
 
 .dark {
@@ -41,6 +53,13 @@
   --warning: 38 72% 56%;
   --danger: 4 66% 60%;
   color-scheme: dark;
+
+  --sombra-1: 0 1px 2px hsl(220 40% 2% / 0.5), 0 1px 1px hsl(220 40% 2% / 0.35),
+    inset 0 1px 0 hsl(0 0% 100% / 0.035);
+  --sombra-2: 0 2px 4px hsl(220 40% 2% / 0.5), 0 8px 16px -6px hsl(220 40% 2% / 0.5),
+    inset 0 1px 0 hsl(0 0% 100% / 0.05);
+  --sombra-3: 0 4px 10px hsl(220 40% 2% / 0.5), 0 16px 36px -10px hsl(220 40% 2% / 0.6),
+    inset 0 1px 0 hsl(0 0% 100% / 0.06);
 }
 
 @layer base {
@@ -61,9 +80,16 @@
   ::selection {
     background: hsl(var(--accent) / 0.28);
   }
-  /* Móvil: iOS hace zoom automático al enfocar un campo de menos de 16px.
-     Subimos a 16px en pantallas estrechas para que no salte el zoom. */
-  @media (max-width: 767px) {
+  /* Foco visible y coherente en todo lo que se navega con teclado. */
+  :focus-visible {
+    outline: 2px solid hsl(var(--accent) / 0.7);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  /* Móvil y tablet: iOS hace zoom automático al enfocar un campo de menos de
+     16px, y el iPad en vertical (768px) también. El corte va con `lg`, igual
+     que la densidad táctil y que el cambio de tabla a tarjetas del ranking. */
+  @media (max-width: 1023px) {
     input,
     select,
     textarea {
@@ -102,24 +128,33 @@
   tbody td {
     @apply px-3 py-2 border-b border-line/70 align-middle;
   }
+  /* La fila responde: fondo + una guía de acento a la izquierda que aparece al
+     pasar. Marca dónde está el ojo sin mover nada de sitio. */
   tbody tr {
-    @apply transition-colors;
+    box-shadow: inset 2px 0 0 -2px hsl(var(--accent));
+    transition: background-color 150ms var(--sal), box-shadow 150ms var(--sal);
   }
   tbody tr:hover {
     @apply bg-elevated/60;
+    box-shadow: inset 2px 0 0 0 hsl(var(--accent) / 0.55);
   }
   tbody tr:last-child td {
     @apply border-b-0;
   }
 
   /* Controles de formulario: heredan el tema sin repetir clases por página.
-     En móvil el alto mínimo es 44px (área táctil cómoda); en escritorio vuelve
-     a la densidad compacta del terminal. */
+     Hasta 1024px el alto mínimo es 44px (área táctil cómoda, tablet incluida);
+     de ahí para arriba vuelve a la densidad compacta del terminal. */
   .campo {
     @apply bg-elevated border border-line rounded-md px-3 py-2 text-fg
-      min-h-[44px] md:min-h-0 md:px-2.5 md:py-1.5 md:text-sm
-      placeholder:text-faint outline-none transition
+      min-h-[44px] lg:min-h-0 lg:px-2.5 lg:py-1.5 lg:text-sm
+      placeholder:text-faint outline-none
       focus:border-accent focus:ring-2 focus:ring-accent/25;
+    transition: border-color 150ms var(--sal), box-shadow 150ms var(--sal),
+      background-color 150ms var(--sal);
+  }
+  .campo:hover:not(:focus) {
+    border-color: hsl(var(--muted) / 0.4);
   }
   select.campo {
     @apply pr-8;
@@ -128,9 +163,9 @@
     @apply block text-[11px] font-medium uppercase tracking-wider text-faint mb-1;
   }
 
-  /* Sliders manejables con el dedo: pista visible y pulgar grande en móvil. */
+  /* Sliders manejables con el dedo: pista visible y pulgar grande en táctil. */
   input[type="range"] {
-    @apply w-full cursor-pointer appearance-none bg-transparent h-11 md:h-6;
+    @apply w-full cursor-pointer appearance-none bg-transparent h-11 lg:h-6;
   }
   input[type="range"]::-webkit-slider-runnable-track {
     @apply h-1.5 rounded-full;
@@ -139,9 +174,18 @@
   input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    @apply h-6 w-6 md:h-4 md:w-4 rounded-full border-0;
+    @apply h-6 w-6 lg:h-4 lg:w-4 rounded-full border-0;
     background: hsl(var(--accent));
     margin-top: -9px;
+    box-shadow: var(--sombra-1);
+    transition: transform 150ms var(--sal), box-shadow 150ms var(--sal);
+  }
+  input[type="range"]:hover::-webkit-slider-thumb {
+    transform: scale(1.12);
+    box-shadow: var(--sombra-2);
+  }
+  input[type="range"]:active::-webkit-slider-thumb {
+    transform: scale(0.96);
   }
   input[type="range"]:focus-visible::-webkit-slider-thumb {
     box-shadow: 0 0 0 3px hsl(var(--accent) / 0.3);
@@ -151,8 +195,17 @@
     background: hsl(var(--line));
   }
   input[type="range"]::-moz-range-thumb {
-    @apply h-6 w-6 md:h-4 md:w-4 rounded-full border-0;
+    @apply h-6 w-6 lg:h-4 lg:w-4 rounded-full border-0;
     background: hsl(var(--accent));
+  }
+
+  /* Tooltip de recharts: mismo objeto flotante que el resto de la app. */
+  .recharts-default-tooltip,
+  .recharts-tooltip-wrapper > div {
+    box-shadow: var(--sombra-3) !important;
+  }
+  .recharts-tooltip-wrapper {
+    transition: transform 120ms var(--sal) !important;
   }
 }
 
@@ -162,5 +215,74 @@
   .tabla-scroll {
     @apply overflow-x-auto -mx-4 px-4 md:mx-0 md:px-0;
     -webkit-overflow-scrolling: touch;
+  }
+
+  /* --- Movimiento -----------------------------------------------------------
+     Reglas: 150–250ms, siempre ease-out, siempre desplazamientos cortos (≤6px).
+     Sirve para orientar (algo llegó, algo cambió), no para decorar. -------- */
+
+  @keyframes aparecer {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  .aparecer {
+    animation: aparecer 220ms var(--sal) both;
+  }
+
+  /* Aparición escalonada. El hijo lleva `--i` (su índice) y el retardo se
+     calcula solo. Se topa en 14 pasos: con 200 filas, la última no puede
+     tardar cuatro segundos en existir. */
+  .escalonado > * {
+    animation: aparecer 220ms var(--sal) both;
+    animation-delay: calc(min(var(--i, 0), 14) * 22ms);
+  }
+
+  @keyframes desplegar {
+    from {
+      opacity: 0;
+      transform: translateY(-6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  .desplegar {
+    animation: desplegar 180ms var(--sal) both;
+  }
+
+  /* Esqueletos de carga: insinúan la forma de lo que viene. Latido de opacidad,
+     no barrido brillante — un shimmer llamaría la atención sobre sí mismo. */
+  @keyframes latido {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.45;
+    }
+  }
+  .esqueleto {
+    @apply rounded bg-line/60;
+    animation: latido 1.5s ease-in-out infinite;
+  }
+
+  /* Quien pide menos movimiento no recibe ninguno. Los estados finales siguen
+     siendo los correctos porque todas las animaciones son `both`. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
