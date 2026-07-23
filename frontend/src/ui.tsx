@@ -95,7 +95,7 @@ export function Boton({
       onClick={onClick}
       disabled={disabled || cargando}
       title={title}
-      className={`inline-flex items-center justify-center gap-1.5 px-4 lg:px-3 min-h-[44px] lg:min-h-0 lg:py-1.5 rounded-md text-sm lg:text-[13px] font-medium
+      className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 tactil:px-4 tactil:py-0 tactil:min-h-[44px] rounded-md text-[13px] tactil:text-sm font-medium
         transition-[background-color,border-color,box-shadow,transform,opacity] duration-150
         active:translate-y-px disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none disabled:active:translate-y-0 ${estilos} ${className}`}
     >
@@ -328,6 +328,19 @@ export function BadgeTuristica() {
   );
 }
 
+/** CONFOTUR (Ley 158-01, RD): el inmueble no paga el impuesto de transferencia,
+ *  así que su coste de adquisición es sensiblemente menor. Se marca en verde
+ *  sobrio porque es una ventaja real sobre un inmueble idéntico sin ella. */
+export function BadgeConfotur() {
+  return (
+    <Pista texto="Acogido a CONFOTUR (Ley 158-01): exento del impuesto de transferencia y del IPI durante 15 años. Su coste de adquisición es menor que el de un inmueble idéntico sin la exención, y el motor ya lo ha descontado.">
+      <span className={`${MARCA} text-positive border border-positive/40 hover:bg-positive/10`}>
+        CONFOTUR
+      </span>
+    </Pista>
+  );
+}
+
 /** Marca de ranking: el score ignoró señales que el catálogo del país no contempla. */
 export function BadgeSenalIgnorada({ pais }: { pais?: string | null }) {
   return (
@@ -387,7 +400,7 @@ export function Interruptor({
       aria-checked={activo}
       title={title}
       onClick={() => onCambiar(!activo)}
-      className="inline-flex items-center gap-2.5 text-sm lg:text-[13px] text-muted hover:text-fg transition select-none min-h-[44px] lg:min-h-0 py-2 lg:py-0"
+      className="inline-flex items-center gap-2.5 text-[13px] tactil:text-sm text-muted hover:text-fg transition select-none py-0 tactil:min-h-[44px] tactil:py-2"
     >
       <span
         className={`relative h-4 w-7 rounded-full transition-colors duration-200 ${
@@ -407,30 +420,56 @@ export function Interruptor({
 
 /* --- Huecos y esperas -------------------------------------------------------- */
 
-/** Un hueco no es un vacío: dice qué falta y qué hacer con ello. */
+/** Un hueco no es un vacío: dice qué falta y qué hacer con ello.
+ *
+ *  Por defecto es UNA LÍNEA con su explicación al lado: un panel monumental por
+ *  cada tabla vacía convertía la pantalla de configuración en scroll infinito.
+ *  `variante="panel"` queda para el hueco protagonista de una pantalla (el
+ *  ranking sin resultados), donde sí es lo único que hay que mirar. */
 export function Vacio({
   children,
   titulo,
   accion,
+  variante = "linea",
 }: {
   children?: ReactNode;
   titulo?: string;
   accion?: ReactNode;
+  variante?: "linea" | "panel";
 }) {
+  const icono = (
+    <svg
+      width={variante === "panel" ? 24 : 15}
+      height={variante === "panel" ? 24 : 15}
+      viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+      className="text-faint shrink-0" aria-hidden
+    >
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M3 9h18" />
+      <path d="M8 14h8" strokeDasharray="2 3" />
+    </svg>
+  );
+
+  if (variante === "panel") {
+    return (
+      <div className="aparecer flex flex-col items-center gap-2 py-8 px-4 text-center">
+        {icono}
+        {titulo && <p className="text-[13px] font-medium text-fg">{titulo}</p>}
+        {children && <p className="text-[13px] text-muted max-w-md leading-relaxed">{children}</p>}
+        {accion && <div className="mt-1">{accion}</div>}
+      </div>
+    );
+  }
   return (
-    <div className="aparecer flex flex-col items-center gap-2 py-10 px-4 text-center">
-      <svg
-        width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-        strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round"
-        className="text-faint/60" aria-hidden
-      >
-        <rect x="3" y="4" width="18" height="16" rx="2" />
-        <path d="M3 9h18" />
-        <path d="M8 14h8" strokeDasharray="2 3" />
-      </svg>
-      {titulo && <p className="text-[13px] font-medium text-muted">{titulo}</p>}
-      {children && <p className="text-[13px] text-faint max-w-sm leading-relaxed">{children}</p>}
-      {accion && <div className="mt-1">{accion}</div>}
+    <div className="aparecer flex items-start gap-2 py-2 text-[13px] leading-relaxed">
+      <span className="mt-0.5">{icono}</span>
+      <div className="min-w-0">
+        {titulo && <span className="font-medium text-fg">{titulo}</span>}
+        {titulo && children && <span className="text-muted"> — </span>}
+        {children && <span className="text-muted">{children}</span>}
+        {accion && <div className="mt-1.5">{accion}</div>}
+      </div>
     </div>
   );
 }
@@ -579,6 +618,28 @@ export function fmtDinero(valor: unknown, moneda?: string | null) {
   const n = Number(valor);
   if (Number.isNaN(n)) return "—";
   return `${n.toLocaleString("es-ES", { maximumFractionDigits: 0 })}${moneda ? " " + moneda : ""}`;
+}
+
+/** Fecha y hora legibles. Un ISO crudo en una tabla no lo lee nadie. */
+export function fmtFechaHora(valor: unknown): string {
+  if (!valor) return "—";
+  const d = new Date(String(valor));
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("es-ES", {
+    day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
+  });
+}
+
+/** Duración entre dos instantes, en la unidad que toque. */
+export function fmtDuracion(desde: unknown, hasta: unknown): string {
+  if (!desde || !hasta) return "—";
+  const a = new Date(String(desde)).getTime();
+  const b = new Date(String(hasta)).getTime();
+  if (Number.isNaN(a) || Number.isNaN(b) || b < a) return "—";
+  const seg = Math.round((b - a) / 1000);
+  if (seg < 60) return `${seg} s`;
+  if (seg < 3600) return `${Math.floor(seg / 60)} min ${seg % 60} s`;
+  return `${Math.floor(seg / 3600)} h ${Math.round((seg % 3600) / 60)} min`;
 }
 
 export function fmtNum(valor: unknown, decimales = 0) {

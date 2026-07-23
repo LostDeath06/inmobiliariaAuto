@@ -15,7 +15,8 @@ _COLUMNAS = """
     tiene_ascensor, ano_construccion, certificado_energetico, direccion_texto, barrio,
     ciudad, provincia, pais, codigo_postal, latitud, longitud, descripcion_completa,
     caracteristicas_listadas, urls_imagenes, tipo_anunciante, fecha_publicacion,
-    gastos_comunidad_mes, estado_calidad, posible_duplicado_cross_portal,
+    gastos_comunidad_mes, estado_calidad, tiene_confotur,
+    posible_duplicado_cross_portal,
     inmuebles_duplicados_ids, primer_visto, ultimo_visto, propietario_id,
     created_at, updated_at
 """
@@ -28,6 +29,9 @@ _ESCRIBIBLES = {
     "latitud", "longitud", "descripcion_completa", "caracteristicas_listadas",
     "urls_imagenes", "tipo_anunciante", "fecha_publicacion", "gastos_comunidad_mes",
     "estado_calidad", "propietario_id",
+    # Lo fija el propietario desde la ficha. La ingesta NUNCA lo manda, así que
+    # reingestar el mismo anuncio no borra lo que el propietario haya confirmado.
+    "tiene_confotur",
 }
 
 
@@ -155,3 +159,30 @@ async def contar_historico(inmueble_id: UUID) -> int:
         "SELECT count(*) AS n FROM historico_precios WHERE inmueble_id = $1", inmueble_id
     )
     return int(fila["n"]) if fila else 0
+
+
+async def resumen_inventario(pais: str | None = None) -> dict:
+    """Cuántos inmuebles hay y en qué estado de calidad.
+
+    El ranking excluye NO_CALCULABLE y DESCARTADO_RIESGO, que es correcto pero deja
+    inmuebles reales fuera de toda pantalla. Con esto el ranking puede decir
+    "0 puntuados · 9 sin puntuar" en vez de un cero mudo.
+    """
+    condicion, args = "", []
+    if pais:
+        args.append(pais)
+        condicion = " WHERE pais = $1"
+    filas = await basedatos.obtener_todos(
+        f"SELECT COALESCE(estado_calidad::text, 'SIN_ESTADO') AS estado, count(*) AS n "
+        f"FROM inmuebles{condicion} GROUP BY 1",
+        *args,
+    )
+    por_estado = {f["estado"]: f["n"] for f in filas}
+    total = sum(por_estado.values())
+    # "Puntuables" = los que el ranking puede llegar a mostrar.
+    no_puntuables = por_estado.get("NO_CALCULABLE", 0) + por_estado.get("DESCARTADO_RIESGO", 0)
+    return {
+        "total": total,
+        "por_estado": por_estado,
+        "no_puntuables": no_puntuables,
+    }

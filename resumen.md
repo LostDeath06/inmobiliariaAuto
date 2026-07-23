@@ -14,7 +14,7 @@ Producto **greenfield**, construido de la Fase 0 a la 9 y **desplegado 24/7**.
 
 - **Producción:** https://inmobiliariaauto.com (VPS Hostinger + Cloudflare Tunnel, tras contraseña)
 - **Local:** UI `localhost:5173` · API `localhost:8000/docs` · Postgres `5455`
-- **Tests:** `49 passed`
+- **Tests:** `58 passed`
 - **Inventario:** 32 inmuebles reales (ES 16 · DO 16 · VE 0), los 32 analizados por Claude
 - **Frente abierto único:** OpenClaw — código completo y desplegable, sin ejecutar aún
   contra el agente real
@@ -205,6 +205,35 @@ ocupación, el cálculo de corta estancia es el paso siguiente
 
 Zonas marcadas hoy: Cap Cana, Bávaro y Punta Cana (3).
 
+### 5.1 CONFOTUR — la exención que cambia el coste de adquisición (RD)
+
+Un proyecto acogido a la **Ley 158-01 (CONFOTUR)** está **exento del impuesto de
+transferencia (3%) y del IPI durante 15 años**. Aplica a zonas turísticas —Cap Cana y
+Punta Cana incluidas—, así que **dos inmuebles idénticos tienen gastos de adquisición
+muy distintos** según tengan CONFOTUR o no. Aplicar el 3% a todos por igual inflaba el
+coste de los exentos y hundía su ROI falsamente.
+
+Cómo se resuelve, respetando los tres principios (migración `0008`):
+
+- **`inmuebles.tiene_confotur`** (booleano, `NULL` por defecto). Lo fija el propietario
+  desde la ficha (control de tres estados: sí / no / no lo sé). La ingesta **nunca** lo
+  toca, así que reingestar el anuncio no borra lo confirmado.
+- **`NULL` ≠ `FALSE`.** «Desconocido» calcula con el impuesto aplicado (la hipótesis
+  conservadora, la que no infla el ROI), **pero** degrada el score a `PARCIAL` con
+  `tiene_confotur[desconocido]` en `campos_faltantes`. Nunca da por hecho que el
+  inmueble paga sin que alguien lo confirme.
+- **Qué conceptos exime es dato, no código (Principio 2):** la columna
+  `gastos_adquisicion.exento_confotur` marca los conceptos exentos. El motor no sabe
+  qué es un impuesto de transferencia; solo salta los gastos marcados si el inmueble
+  está acogido. Un test lo protege: renombrar el concepto no engaña al motor.
+- **Claude sugiere, Python decide:** el análisis trae `menciona_exencion_fiscal`
+  (SI/NO/DUDOSO), una **señal de lectura del anuncio**, no una decisión. Si el anuncio
+  no dice nada —lo normal— es `DUDOSO`. Nunca supone.
+- **Visible:** badge `CONFOTUR` (verde sobrio) en ranking, ficha e inventario.
+
+La exención mueve el ROI de verdad: con y sin CONFOTUR el capital invertido difiere en
+exactamente el 3% del precio. Marcar un Cap Cana real es el siguiente paso (§12).
+
 ---
 
 ## 6. Datos reales cargados y el mapa de portales
@@ -240,6 +269,26 @@ solo en vez de parecer un fallo.
 | VE | — *(al contado)* | 0.00 | 0.25 | 0.15 | 0.40 |
 
 21 benchmarks de zona cargados, todos con la fuente citada y marcados `VALIDAR`.
+
+**Gastos de adquisición cargados** (`scripts/cargar_config_mercado.py`, idempotente,
+con `--purgar` y `--simular`, todo `PROVISIONAL` salvo lo verificado):
+
+- **ES:** ITP por comunidad autónoma (19 filas, 4,0%–10,0%) + gastos fijos comunes
+  (notaría 750, registro 550, gestoría 400, tasación 450 €). El ITP varía por comunidad,
+  así que hay una fila por comunidad y un **mapa provincia → comunidad**
+  (`regiones_fiscales`) para saber cuál aplica; sin ese mapa el motor sumaría todas (§8.6).
+- **DO:** impuesto de transferencia 3% (`exento_confotur`), honorarios 1,25%, cierre 1%.
+  Tipo de interés hipotecario **11,5%** (DOP).
+- **VE:** un único gasto de cierre **agregado 10%** (no desglosado: la ley fija 2% de
+  arancel pero se documentó un 10% real por discrecionalidad del registrador; desglosar
+  daría falsa precisión).
+
+Dos límites conocidos de estos datos: el ITP escalado por tramos y la tasa por moneda de
+DO — ambos en §11.
+
+**Lo que NO se cargó a propósito:** costes de reforma €/m², benchmarks de zona nuevos y
+catálogos de riesgo de DO/VE. Van con presupuesto real / por barrio / criterio legal
+local. El sistema ya avisa de que faltan.
 
 > **Aviso importante sobre estos benchmarks.** Los de **nivel ciudad son gruesos** y
 > distorsionan: usar la media de Madrid (€4.300/m²) para un barrio barato como
@@ -308,8 +357,20 @@ por tramos sobrio, gráficos con la paleta propia. Sin emojis.
 
 **Responsive** (medido a 375px y 768px, no a ojo): ranking en **tarjetas por debajo de
 1024px** (a 768px la tabla medía ~890px y obligaba a arrastrar de lado), navegación
-hamburguesa, áreas táctiles ≥44px, inputs a 16px en móvil para evitar el zoom de iOS,
-gráficos ajustados al ancho, cero desbordamiento horizontal.
+hamburguesa, gráficos ajustados al ancho, cero desbordamiento horizontal.
+
+La **densidad va por tipo de puntero, no por ancho** (`@media (pointer: coarse)`, variante
+`tactil:` de Tailwind). Un primer intento la ató a un breakpoint por ancho (`lg`) y una
+ventana de escritorio estrecha (900px) recibía botones de 44px y una densidad absurda:
+una ventana pequeña no es una tablet. `pointer: coarse` pregunta lo que importa —si se
+pulsa con el dedo—, así que el iPad recibe las áreas de 44px y los inputs a 16px (anti-zoom
+de iOS) y el escritorio conserva la densidad compacta del terminal.
+
+**Vista Inventario** (§11): lista **todos** los inmuebles cargados, puntúen o no, con su
+estado de calidad. El ranking excluye los `NO_CALCULABLE` (correcto: un score sin config
+no significa nada), y antes eso los hacía desaparecer de toda pantalla. El ranking ahora
+avisa —«27 puntuados · 5 sin puntuar»— con enlace a Inventario y a Estado por país, y la
+ficha de un `NO_CALCULABLE` nombra qué dato concreto falta y enlaza a cargarlo.
 
 ---
 
@@ -356,6 +417,34 @@ benchmark mío mal ubicado, Bávaro bajo Santo Domingo) y se recalculó: ahora s
 
 **La lección:** las purgas por texto exacto son frágiles. Al cargar demo, comprobar
 después con `lower(fuente) LIKE '%demo%'`.
+
+### 8.6 Los gastos de adquisición se sumaban de todas las regiones
+
+Al cargar el ITP por comunidad (una fila por comunidad en `gastos_adquisicion`), afloró
+que `construir_entrada` pedía **todos** los gastos del país sin filtrar por región: cada
+piso español habría sumado los **19 ITP** a la vez. El motor no elige región porque el
+inmueble solo trae `provincia`, no comunidad.
+
+**La solución:** una tabla `regiones_fiscales` (provincia → comunidad, dato en BD, no
+diccionario en Python) y filtrado por la región resuelta. Si la provincia no está en el
+mapa, **no** se calcula por lo bajo con solo los gastos comunes: se inyecta un concepto
+ausente que deja el inmueble `PARCIAL`, nombrando la provincia sin resolver. Un coste de
+adquisición más barato de lo real es un ROI inflado, justo el error que perjudica a quien
+decide comprar.
+
+### 8.7 El analista se tragaba el motivo del fallo *(explica el coste 0.0000)*
+
+Un job entró `PARCIAL` con 9 válidos, pero el ranking seguía en 0 y el `COSTE USD` salía
+`0.0000`. La causa: el bucle de reintentos del analista hacía `except Exception: continue`
+y descartaba el error. Coste 0 = la API **ni se llamó** (clave inválida, en este caso),
+pero no quedaba rastro de por qué; había que abrir los logs del contenedor para saberlo.
+
+Contra el Principio 3 (un fallo silencioso es peor que uno ruidoso): ahora la última
+excepción se guarda en `analisis_cualitativos.motivo_fallo` y se propaga a
+`jobs.error_mensaje`, visible en el Monitor y en la ficha. Y como el análisis se intenta
+**siempre** (antes de las métricas, sin depender de la config de mercado), «sin análisis»
+significa «análisis que falló», no «pendiente»: de ahí el botón **Reprocesar sin análisis**,
+que reintenta en lote sin volver a pedir nada a OpenClaw.
 
 ---
 
@@ -405,12 +494,13 @@ adaptador a escuchar en `0.0.0.0`, y por tanto **a cerrar el 8080 en `ufw`**.
 
 ---
 
-## 10. Tests (49) — y cuáles son barreras
+## 10. Tests (58) — y cuáles son barreras
 
 | Fichero | N.º | Qué cubre |
 |---|---|---|
 | `test_motor_financiero.py` | 15 | Casos calculados a mano, FX multi-divisa, NO_CALCULABLE |
 | `test_motor_scoring.py` | 7 | Redistribución de pesos, multiplicador de riesgo país |
+| `test_confotur.py` | **9** | CONFOTUR exime el gasto marcado (no otro); `null` ≠ `false`; cambia el ROI |
 | `test_validacion_ingesta.py` | 7 | Válido, cuarentena, no-invención |
 | `test_senales_no_reconocidas.py` | **8** | Códigos fuera de catálogo nunca se pierden |
 | `test_blindaje_senales_ignoradas.py` | **6** | Un score con señales ignoradas nunca es COMPLETO |
@@ -437,9 +527,23 @@ Ordenado por lo que morderá antes.
    riesgo o de oportunidad; marca `PARCIAL` en ambos casos (conservador a propósito).
 6. **Dedup cross-portal heurística** (ciudad + precio ±5% + m² ±5%): solo marca, nunca
    fusiona. Dará falsos positivos y negativos.
-7. **Tooltip de auditoría de métricas** usa `title` nativo: **no funciona en táctil**.
-8. **Sin TLS extremo a extremo** (§7.3).
-9. **RLS permisivo:** la barrera real es la auth de nginx, no la base de datos.
+7. **ITP español sin tramos.** Aragón, Asturias, Extremadura, Baleares y Cataluña aplican
+   el ITP **por tramos de precio** (sube con el valor). `gastos_adquisicion` guarda un
+   valor por (país, región, concepto), así que se cargó el **tramo más bajo**: en esas
+   cinco comunidades un inmueble caro sale con el ITP infraestimado y el ROI algo alto.
+   Soportarlo exige una tabla hija (región, precio_desde, precio_hasta, tipo). Cataluña
+   además tiene un 20% para grandes tenedores: no cargado (es cuestión de sujeto, no de
+   inmueble).
+8. **Tipo de interés de DO sin distinguir por moneda.** Se cargó el 11,5% de la
+   financiación en DOP; en USD la tasa habitual es 7–8%. `config_mercado_pais` guarda un
+   tipo por país, no por moneda, así que un inmueble en USD sale con la cuota
+   sobreestimada y el ROI a la baja (error conservador).
+9. **Sin TLS extremo a extremo** (§7.3).
+10. **RLS permisivo:** la barrera real es la auth de nginx, no la base de datos.
+
+*Resuelto desde la última versión de este documento:* el tooltip de auditoría de métricas
+ya no usa `title` nativo (no funcionaba en táctil) — es un panel pulsable; y los inmuebles
+`NO_CALCULABLE` que «desaparecían» del ranking ahora se ven en la vista Inventario (§7.4).
 
 ---
 
@@ -447,10 +551,14 @@ Ordenado por lo que morderá antes.
 
 1. **Ejecutar la sonda de OpenClaw** en el VPS y activar `OPENCLAW_MODE=http`. Con eso el
    ciclo se cierra solo: el worker despacha por cron y los inmuebles entran sin tocar nada.
-2. **Validar y afinar los benchmarks** de ES y DO a nivel barrio (§6.1).
-3. **Cargar ADR y ocupación de Cap Cana** y activar el cálculo de corta estancia (§5).
-4. **Definir `riesgos_pais` de VE** y encontrar una fuente de anuncios que no bloquee.
-5. Convertir el tooltip de auditoría en un panel pulsable (táctil).
+2. **Validar los datos fiscales `PROVISIONAL`** cargados (§6.1) y afinar los benchmarks de
+   ES y DO a nivel barrio (lo que más cambiaría el ranking).
+3. **Marcar CONFOTUR en los Cap Cana reales** (§5.1): hoy están todos en `NULL`
+   (desconocido), así que su score sale `PARCIAL` con el impuesto aplicado.
+4. **Cargar ADR y ocupación de Cap Cana** y activar el cálculo de corta estancia (§5).
+5. **Definir `riesgos_pais` de VE** y encontrar una fuente de anuncios que no bloquee.
+6. **ITP por tramos** (§11.7) y **tasa por moneda en DO** (§11.8) si el afinado fiscal lo
+   pide: ambos exigen una tabla hija y que el motor elija fila por precio / por divisa.
 
 ---
 

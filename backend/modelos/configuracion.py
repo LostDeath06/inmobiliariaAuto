@@ -110,6 +110,8 @@ class GastoAdquisicion(ModeloBase):
     tipo: TipoGastoAdquisicion
     valor: Decimal | None = None
     moneda: str | None = None
+    # Qué conceptos exime CONFOTUR es configuración, no código (Principio 2).
+    exento_confotur: bool = False
     fuente: str | None = None
     updated_at: datetime | None = None
 

@@ -100,7 +100,7 @@ async def ranking(
                s.obsoleto, s.desglose,
                i.titulo, i.precio, i.moneda, i.ciudad, i.pais, i.url_anuncio,
                i.superficie_util_m2, i.superficie_construida_m2,
-               i.posible_duplicado_cross_portal,
+               i.posible_duplicado_cross_portal, i.tiene_confotur,
                z.perfil_zona
         FROM scores s JOIN inmuebles i ON i.id = s.inmueble_id
         -- Perfil de la zona (turística/estándar) para marcarlo en el ranking. Prioriza

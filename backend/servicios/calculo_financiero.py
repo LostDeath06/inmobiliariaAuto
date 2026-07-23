@@ -49,11 +49,42 @@ async def construir_entrada(
     coste_m2 = coste.coste_m2 if coste else None
     moneda_coste = coste.moneda if coste else None
 
-    filas_gasto = await config_mercado.listar_gastos_adquisicion(pais)
+    # --- Gastos de adquisición: genéricos + los de la región del inmueble ------
+    # El ITP español varía por comunidad, así que `gastos_adquisicion` tiene una
+    # fila por comunidad (region='Madrid', 'Cataluña'…) además de los conceptos
+    # comunes a todo el país (region=''). Sin filtrar por región se sumarían las
+    # 19 comunidades a la vez.
+    #
+    # La región sale de un mapa provincia → comunidad en BD (dato, no diccionario
+    # en Python). Si el país tiene gastos por región y no logramos resolver la del
+    # inmueble, NO se calcula por lo bajo: se inyecta un concepto con valor None,
+    # que el motor trata como dato ausente y degrada la calidad. Rellenar el hueco
+    # con solo los gastos comunes daría un coste de adquisición más barato de lo
+    # real y un ROI inflado.
+    todos_los_gastos = await config_mercado.listar_gastos_adquisicion(pais)
+    region = await config_mercado.resolver_region(pais, inmueble.provincia)
+    hay_gastos_por_region = any(g.region for g in todos_los_gastos)
+
+    if hay_gastos_por_region and region is None:
+        filas_gasto = [g for g in todos_los_gastos if not g.region]
+        region_sin_resolver = True
+    else:
+        filas_gasto = [g for g in todos_los_gastos if not g.region or g.region == region]
+        region_sin_resolver = False
+
     gastos = [
-        mf.GastoAdquisicionEntrada(g.concepto, g.tipo.value, g.valor, g.moneda)
+        mf.GastoAdquisicionEntrada(
+            g.concepto, g.tipo.value, g.valor, g.moneda, g.exento_confotur
+        )
         for g in filas_gasto
     ]
+    if region_sin_resolver:
+        gastos.append(
+            mf.GastoAdquisicionEntrada(
+                concepto=f"region_fiscal_no_resuelta[{inmueble.provincia or 'sin provincia'}]",
+                tipo="PORCENTAJE", valor=None, moneda=None,
+            )
+        )
 
     bench = None
     if inmueble.ciudad:
@@ -103,10 +134,15 @@ async def construir_entrada(
         moneda_coste_reforma=moneda_coste,
         moneda_benchmark=moneda_bench,
         tasas=tasas,
+        # None = desconocido. El motor lo distingue de False y lo refleja en la
+        # calidad del dato si hay conceptos exentos configurados para el país.
+        tiene_confotur=inmueble.tiene_confotur,
     )
     snapshot_mercado = {
         "pais": pais,
+        "region_fiscal": region,
         "moneda_calculo": moneda_calculo,
+        "tiene_confotur": inmueble.tiene_confotur,
         "tipo_interes_anual": str(tipo_interes) if tipo_interes is not None else None,
         "ltv_max": str(ltv_max) if ltv_max is not None else None,
         "ltv_efectivo": str(ltv_efectivo),

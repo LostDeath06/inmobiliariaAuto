@@ -56,7 +56,9 @@ async def establecer_coste_reforma(
     return a_modelo(fila, CosteReforma)  # type: ignore[return-value]
 
 
-_COL_GASTO = "id, pais, region, concepto, tipo, valor, moneda, fuente, updated_at"
+_COL_GASTO = (
+    "id, pais, region, concepto, tipo, valor, moneda, exento_confotur, fuente, updated_at"
+)
 
 
 async def listar_gastos_adquisicion(
@@ -106,18 +108,19 @@ async def obtener_benchmark_zona(
 
 async def establecer_gasto_adquisicion(
     *, pais: str, region: str, concepto: str, tipo: str, valor: Decimal | None,
-    moneda: str | None, fuente: str | None,
+    moneda: str | None, fuente: str | None, exento_confotur: bool = False,
 ) -> GastoAdquisicion:
     fila = await basedatos.obtener_uno(
         f"""
-        INSERT INTO gastos_adquisicion (pais, region, concepto, tipo, valor, moneda, fuente)
-        VALUES ($1,$2,$3,$4,$5,$6,$7)
+        INSERT INTO gastos_adquisicion
+            (pais, region, concepto, tipo, valor, moneda, fuente, exento_confotur)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
         ON CONFLICT (pais, region, concepto) DO UPDATE SET
             tipo = EXCLUDED.tipo, valor = EXCLUDED.valor, moneda = EXCLUDED.moneda,
-            fuente = EXCLUDED.fuente
+            fuente = EXCLUDED.fuente, exento_confotur = EXCLUDED.exento_confotur
         RETURNING {_COL_GASTO}
         """,
-        pais, region, concepto, tipo, valor, moneda, fuente,
+        pais, region, concepto, tipo, valor, moneda, fuente, exento_confotur,
     )
     return a_modelo(fila, GastoAdquisicion)  # type: ignore[return-value]
 
@@ -172,3 +175,70 @@ async def listar_benchmarks_zona(pais: str | None = None) -> list[BenchmarkZona]
             f"SELECT {_COL_BENCH} FROM benchmarks_zona ORDER BY pais, ciudad, barrio"
         )
     return a_modelos(filas, BenchmarkZona)
+
+
+# --- Regiones fiscales -------------------------------------------------------
+# El ITP español varía por comunidad autónoma, así que `gastos_adquisicion` tiene
+# una fila por comunidad. Pero el inmueble solo trae `provincia`: sin este mapa,
+# el servicio no sabría qué fila le toca y acabaría sumando todas.
+
+
+async def resolver_region(pais: str, provincia: str | None) -> str | None:
+    """Región fiscal de una provincia. None si no hay mapeo (no se adivina)."""
+    if not provincia:
+        return None
+    fila = await basedatos.obtener_uno(
+        "SELECT region FROM regiones_fiscales WHERE pais = $1 AND lower(provincia) = lower($2)",
+        pais, provincia,
+    )
+    return fila["region"] if fila else None
+
+
+async def establecer_region_fiscal(
+    *, pais: str, provincia: str, region: str, fuente: str | None = None
+) -> None:
+    await basedatos.ejecutar(
+        """
+        INSERT INTO regiones_fiscales (pais, provincia, region, fuente)
+        VALUES ($1,$2,$3,$4)
+        ON CONFLICT (pais, provincia) DO UPDATE SET
+            region = EXCLUDED.region, fuente = EXCLUDED.fuente
+        """,
+        pais, provincia, region, fuente,
+    )
+
+
+async def listar_regiones_fiscales(pais: str | None = None) -> list[dict]:
+    if pais:
+        filas = await basedatos.obtener_todos(
+            "SELECT pais, provincia, region, fuente FROM regiones_fiscales "
+            "WHERE pais = $1 ORDER BY provincia",
+            pais,
+        )
+    else:
+        filas = await basedatos.obtener_todos(
+            "SELECT pais, provincia, region, fuente FROM regiones_fiscales "
+            "ORDER BY pais, provincia"
+        )
+    return [dict(f) for f in filas]
+
+
+async def borrar_regiones_fiscales(pais: str) -> int:
+    return await basedatos.ejecutar(
+        "DELETE FROM regiones_fiscales WHERE pais = $1", pais
+    )
+
+
+async def borrar_gastos_adquisicion(pais: str, fuente_like: str | None = None) -> int:
+    """Purga usada por el script de carga (--purgar).
+
+    El filtro por fuente va en `lower(...) LIKE`: purgar por texto exacto ya nos
+    mordió una vez (un benchmark 'demo' en minúscula sobrevivió a la limpieza y
+    contaminó un score real).
+    """
+    if fuente_like:
+        return await basedatos.ejecutar(
+            "DELETE FROM gastos_adquisicion WHERE pais = $1 AND lower(fuente) LIKE lower($2)",
+            pais, fuente_like,
+        )
+    return await basedatos.ejecutar("DELETE FROM gastos_adquisicion WHERE pais = $1", pais)

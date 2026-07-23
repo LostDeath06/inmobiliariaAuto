@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, PAISES } from "../api";
 import {
-  AvisoProvisional, BadgeCalidad, BadgeDup, BadgeSenalIgnorada, BadgeTuristica, Card,
-  EsqueletoRanking, Interruptor, ScoreCelda, Vacio, fmtDinero, fmtNum, paso,
+  AvisoProvisional, BadgeCalidad, BadgeConfotur, BadgeDup, BadgeSenalIgnorada,
+  BadgeTuristica, Card, EsqueletoRanking, Interruptor, ScoreCelda, Vacio,
+  fmtDinero, fmtNum, paso,
 } from "../ui";
 
 export default function Ranking() {
@@ -12,6 +13,7 @@ export default function Ranking() {
   const [pais, setPais] = useState("");
   const [sinRiesgoPais, setSinRiesgoPais] = useState(false);
   const [filas, setFilas] = useState<any[]>([]);
+  const [inventario, setInventario] = useState<any>(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
 
@@ -35,9 +37,22 @@ export default function Ranking() {
       .finally(() => setCargando(false));
   }, [perfilId, pais, sinRiesgoPais]);
 
+  // Cuántos inmuebles hay REALMENTE, puntúen o no. Sin esto, el ranking dice
+  // "0 inmuebles" cuando en realidad hay nueve que entraron y no pueden puntuar,
+  // y no queda ni rastro de ellos en ninguna pantalla.
+  useEffect(() => {
+    const q = pais ? `?pais=${pais}` : "";
+    api.get(`/api/inventario/resumen${q}`).then(setInventario).catch(() => setInventario(null));
+  }, [pais, perfilId]);
+
+  // Inmuebles que existen pero no salen en el ranking. Se calcula contra el
+  // inventario real, no contra el número de filas: el ranking ya viene filtrado.
+  const ocultos = inventario ? Math.max(0, inventario.total - filas.length) : 0;
+
   /** Marcas de la fila. Se reutilizan en tabla y tarjeta para no divergir. */
   const marcas = (f: any) => (
     <>
+      {f.tiene_confotur === true && <BadgeConfotur />}
       {f.perfil_zona === "TURISTICA" && <BadgeTuristica />}
       {f.desglose?.senales_no_reconocidas?.length > 0 && <BadgeSenalIgnorada pais={f.pais} />}
       {f.usa_parametros_provisionales && <AvisoProvisional />}
@@ -83,16 +98,34 @@ export default function Ranking() {
         subtitulo={
           cargando
             ? "cargando…"
-            : `${filas.length} inmuebles · ordenado por ${sinRiesgoPais ? "score bruto" : "score total"}`
+            : `${filas.length} puntuados${ocultos > 0 ? ` · ${ocultos} sin puntuar` : ""}` +
+              ` · ordenado por ${sinRiesgoPais ? "score bruto" : "score total"}`
         }
       >
+        {/* Un inmueble que entró al sistema y no puede puntuar sigue siendo un
+            inmueble real. Antes desaparecía sin dejar rastro; ahora el ranking
+            dice cuántos hay y por dónde se ven. */}
+        {!cargando && ocultos > 0 && (
+          <div className="aparecer mb-3 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-[13px] text-muted leading-relaxed">
+            <strong className="text-fg font-medium">{ocultos}</strong>{" "}
+            {ocultos === 1 ? "inmueble no puntúa" : "inmuebles no puntúan"} todavía
+            {pais ? ` en ${pais}` : ""} y por eso no {ocultos === 1 ? "aparece" : "aparecen"} aquí.
+            Falta configuración de mercado: sin ella el score no significaría nada.{" "}
+            <Link to="/inventario" className="text-accent hover:underline">Verlos en Inventario</Link>
+            {" · "}
+            <Link to="/estado" className="text-accent hover:underline">Qué falta por país</Link>
+          </div>
+        )}
+
         {cargando ? (
           <EsqueletoRanking />
         ) : filas.length === 0 && !error ? (
-          <Vacio titulo="Sin inmuebles en el ranking">
-            {pais
-              ? `No hay inmuebles puntuados en ${pais}. Comprueba en «Estado por país» que su configuración de mercado esté cargada, y en «Portales» que haya una búsqueda ejecutada.`
-              : "No hay ningún inmueble puntuado todavía. Ejecuta una búsqueda en «Portales» o revisa «Estado por país» para ver qué configuración falta."}
+          <Vacio variante="panel" titulo="Sin inmuebles puntuados">
+            {ocultos > 0
+              ? `Hay ${ocultos} inmuebles cargados que aún no pueden puntuar. Carga la configuración de mercado del país y vuelve a recalcular.`
+              : pais
+                ? `No hay inmuebles en ${pais}. Comprueba en «Portales» que haya una búsqueda ejecutada.`
+                : "No hay ningún inmueble cargado todavía. Ejecuta una búsqueda en «Portales»."}
           </Vacio>
         ) : (
           <>

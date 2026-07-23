@@ -55,6 +55,36 @@ async def listar_inmuebles(
     )
 
 
+@router.get("/inventario/resumen")
+async def resumen_inventario(pais: str | None = None):
+    """Cuántos inmuebles hay y en qué estado. Lo usa el ranking para no mostrar
+    un "0 inmuebles" mudo cuando en realidad hay inmuebles que no pueden puntuar."""
+    return await repo_inmuebles.resumen_inventario(pais)
+
+
+@router.put("/inmuebles/{inmueble_id}/confotur")
+async def fijar_confotur(inmueble_id: UUID, body: dict):
+    """Marca si el inmueble está acogido a CONFOTUR (Ley 158-01, RD).
+
+    `tiene_confotur`: true | false | null. NULL es DESCONOCIDO y es un valor
+    legítimo, no una forma de borrar: el motor lo distingue de false y degrada la
+    calidad del dato en vez de asumir que el inmueble paga el impuesto.
+    Solo lo fija el propietario: Claude únicamente puede sugerirlo desde el análisis.
+    """
+    if "tiene_confotur" not in body:
+        raise HTTPException(422, "Falta el campo tiene_confotur (true, false o null)")
+    valor = body["tiene_confotur"]
+    if valor is not None and not isinstance(valor, bool):
+        raise HTTPException(422, "tiene_confotur debe ser true, false o null")
+    inmueble = await repo_inmuebles.actualizar(inmueble_id, {"tiene_confotur": valor})
+    if inmueble is None:
+        raise HTTPException(404, "Inmueble no encontrado")
+    # El coste de adquisición cambia, así que las métricas y los scores anteriores
+    # ya no valen: se recalculan aquí mismo en vez de dejarlos obsoletos en silencio.
+    await pipeline.recalcular_inmueble(inmueble_id)
+    return {"inmueble_id": str(inmueble_id), "tiene_confotur": valor, "recalculado": True}
+
+
 @router.get("/inmuebles/{inmueble_id}")
 async def ficha_inmueble(inmueble_id: UUID):
     """Ficha completa: datos, métricas con auditoría, análisis y scores por perfil."""
@@ -78,6 +108,10 @@ async def ficha_inmueble(inmueble_id: UUID):
         "zona": zona,
         "metricas": await repo_metricas.obtener(inmueble_id),
         "analisis": await repo_analisis.obtener(inmueble_id),
+        # Estado del análisis aunque haya fallado: `analisis` filtra los fallidos,
+        # así que sin esto la ficha no puede distinguir "pendiente" de "falló, y
+        # este fue el motivo".
+        "analisis_estado": await repo_analisis.obtener_estado(inmueble_id),
         "scores": await repo_scores.listar_por_inmueble(inmueble_id),
         "historico_precios": await repo_inmuebles.listar_historico_precios(inmueble_id),
     }
@@ -108,6 +142,16 @@ async def recalcular(inmueble_id: UUID):
 async def recalcular_scores(inmueble_id: UUID):
     """Solo scores (sin reanalizar): útil tras cambiar configuración de mercado."""
     return await calculo_scoring.calcular_todos_los_perfiles(inmueble_id)
+
+
+@router.post("/pipeline/reprocesar-sin-analisis")
+async def reprocesar_sin_analisis(limite: int = 500):
+    """Reintenta el análisis de los inmuebles que no lo tienen o lo tienen fallido.
+
+    Útil tras arreglar la causa de un fallo (clave de API, modelo, red): los
+    inmuebles ya ingestados no se vuelven a pedir a OpenClaw, solo se reanalizan.
+    """
+    return await pipeline.reprocesar_sin_analisis(limite)
 
 
 @router.post("/pipeline/recalcular-todo")

@@ -12,7 +12,7 @@ _COL_LECTURA = """
     senales_oportunidad, senales_no_reconocidas, apto_alquiler_larga_estancia,
     apto_alquiler_turistico, potencial_division_horizontal, calidad_descripcion,
     coherencia_precio_descripcion, resumen_analista, banderas_rojas_texto,
-    nivel_confianza, campos_no_inferibles
+    nivel_confianza, campos_no_inferibles, menciona_exencion_fiscal
 """
 
 
@@ -28,6 +28,11 @@ async def obtener(inmueble_id: UUID) -> AnalisisCualitativo | None:
     datos = dict(fila)
     if datos.get("resumen_analista") is None:
         datos["resumen_analista"] = ""
+    # Análisis anteriores a la migración 0008 no tienen esta señal. NULL significa
+    # "no se le preguntó", que es DUDOSO — nunca NO: dar por hecho que el anuncio
+    # no menciona la exención sería inventar una respuesta que nadie dio.
+    if datos.get("menciona_exencion_fiscal") is None:
+        datos["menciona_exencion_fiscal"] = "DUDOSO"
     return AnalisisCualitativo(**datos)
 
 _COLUMNAS = """
@@ -36,7 +41,7 @@ _COLUMNAS = """
     apto_alquiler_larga_estancia, apto_alquiler_turistico,
     potencial_division_horizontal, calidad_descripcion, coherencia_precio_descripcion,
     resumen_analista, banderas_rojas_texto, nivel_confianza, campos_no_inferibles,
-    analisis_fallido, modelo
+    menciona_exencion_fiscal, analisis_fallido, modelo
 """
 
 
@@ -55,7 +60,7 @@ async def guardar(
     await basedatos.ejecutar(
         f"""
         INSERT INTO analisis_cualitativos ({_COLUMNAS})
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
         ON CONFLICT (inmueble_id) DO UPDATE SET
             hash_contenido = EXCLUDED.hash_contenido,
             estado_conservacion = EXCLUDED.estado_conservacion,
@@ -73,6 +78,7 @@ async def guardar(
             banderas_rojas_texto = EXCLUDED.banderas_rojas_texto,
             nivel_confianza = EXCLUDED.nivel_confianza,
             campos_no_inferibles = EXCLUDED.campos_no_inferibles,
+            menciona_exencion_fiscal = EXCLUDED.menciona_exencion_fiscal,
             analisis_fallido = EXCLUDED.analisis_fallido,
             modelo = EXCLUDED.modelo
         """,
@@ -93,22 +99,60 @@ async def guardar(
         analisis.banderas_rojas_texto,
         analisis.nivel_confianza.value,
         analisis.campos_no_inferibles,
+        analisis.menciona_exencion_fiscal.value,
         False,
         modelo,
     )
 
 
-async def marcar_fallido(inmueble_id: UUID, modelo: str) -> None:
-    """Marca el inmueble como ANALISIS_FALLIDO sin abortar el lote (§8.1)."""
+async def marcar_fallido(
+    inmueble_id: UUID, modelo: str, motivo: str | None = None
+) -> None:
+    """Marca el inmueble como ANALISIS_FALLIDO sin abortar el lote (§8.1).
+
+    `motivo` guarda la última excepción del analista. Sin él, un lote entero podía
+    fallar dejando solo un coste de 0.0000 y ninguna pista del porqué.
+    """
     await basedatos.ejecutar(
         """
-        INSERT INTO analisis_cualitativos (inmueble_id, analisis_fallido, modelo)
-        VALUES ($1, TRUE, $2)
-        ON CONFLICT (inmueble_id) DO UPDATE SET analisis_fallido = TRUE
+        INSERT INTO analisis_cualitativos (inmueble_id, analisis_fallido, modelo, motivo_fallo)
+        VALUES ($1, TRUE, $2, $3)
+        ON CONFLICT (inmueble_id) DO UPDATE SET
+            analisis_fallido = TRUE, motivo_fallo = EXCLUDED.motivo_fallo
         """,
         inmueble_id,
         modelo,
+        motivo,
     )
+
+
+async def obtener_estado(inmueble_id: UUID) -> dict | None:
+    """Estado del análisis (existe / falló / por qué), aunque haya fallado.
+
+    `obtener()` filtra los fallidos porque devuelve el modelo de juicio; esto es
+    para la ficha, que necesita poder decir «falló, y este fue el motivo».
+    """
+    fila = await basedatos.obtener_uno(
+        "SELECT analisis_fallido, motivo_fallo, modelo, updated_at "
+        "FROM analisis_cualitativos WHERE inmueble_id = $1",
+        inmueble_id,
+    )
+    return dict(fila) if fila else None
+
+
+async def listar_sin_analisis(limite: int = 500) -> list[UUID]:
+    """Inmuebles sin análisis o con análisis fallido: los que hay que reprocesar."""
+    filas = await basedatos.obtener_todos(
+        """
+        SELECT i.id FROM inmuebles i
+        LEFT JOIN analisis_cualitativos a ON a.inmueble_id = i.id
+        WHERE a.inmueble_id IS NULL OR a.analisis_fallido
+        ORDER BY i.ultimo_visto DESC
+        LIMIT $1
+        """,
+        limite,
+    )
+    return [f["id"] for f in filas]
 
 
 async def obtener_hash(inmueble_id: UUID) -> str | None:

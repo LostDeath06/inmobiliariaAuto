@@ -46,6 +46,11 @@ class AnalisisCualitativo(ModeloBase):
     senales_no_reconocidas: list[str] = Field(default_factory=list)
     apto_alquiler_larga_estancia: AptoTernario
     apto_alquiler_turistico: AptoTernario
+    # ¿El anuncio menciona CONFOTUR / Ley 158-01 / exención fiscal? SEÑAL, no
+    # decisión: quien decide si se aplica la exención es Python, leyendo
+    # `inmuebles.tiene_confotur`, que fija el propietario. Claude solo avisa de
+    # que el anuncio lo dice, y usa DUDOSO si no puede afirmarlo (nunca supone).
+    menciona_exencion_fiscal: AptoTernario
     potencial_division_horizontal: AptoTernario
     calidad_descripcion: CalidadDescripcion
     coherencia_precio_descripcion: CoherenciaPrecio

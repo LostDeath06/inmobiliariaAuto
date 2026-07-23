@@ -30,7 +30,13 @@ SYSTEM_PROMPT = (
     "ni estimes un valor plausible.\n\n"
     "Devuelve EXCLUSIVAMENTE el JSON que cumple el esquema indicado. Para "
     "`senales_riesgo` y `senales_oportunidad` usa SOLO los códigos del catálogo que se "
-    "te proporciona para el país del inmueble; si ninguno aplica, usa lista vacía."
+    "te proporciona para el país del inmueble; si ninguno aplica, usa lista vacía.\n\n"
+    "`menciona_exencion_fiscal`: responde SI solo si el anuncio menciona "
+    "explícitamente CONFOTUR, la Ley 158-01 o una exención de impuestos; NO si "
+    "afirma explícitamente que no la tiene; DUDOSO en cualquier otro caso, "
+    "incluido el habitual de que el anuncio no diga nada al respecto. Es una "
+    "SEÑAL de lectura del texto, no un juicio sobre si el inmueble está acogido: "
+    "eso lo confirma el propietario. Ante la duda, DUDOSO."
 )
 
 VERSION_MAX_REINTENTOS = 2
@@ -44,6 +50,10 @@ class ResultadoAnalisis:
     tokens_salida: int
     modelo: str
     fallido: bool
+    # Última excepción cuando `fallido`. Antes se perdía: el bucle atrapaba
+    # cualquier error y seguía, así que un job salía con coste 0.0000 y sin
+    # pista de si era la clave de la API, el modelo o la red.
+    error: str | None = None
 
 
 def _hash_contenido(inmueble: Inmueble) -> str:
@@ -153,6 +163,7 @@ async def analizar(
     usuario = _prompt_usuario(inmueble, codigos_riesgo, codigos_oportunidad)
 
     tokens_in = tokens_out = 0
+    ultimo_error: str | None = None
     for _ in range(VERSION_MAX_REINTENTOS + 1):
         try:
             resp = await cliente.messages.create(
@@ -174,11 +185,15 @@ async def analizar(
                 tokens_entrada=tokens_in, tokens_salida=tokens_out,
                 modelo=cfg.anthropic_model, fallido=False,
             )
-        except Exception:
+        except Exception as e:
+            # Se sigue reintentando (un JSON mal formado suele arreglarse solo),
+            # pero el motivo ya no se tira: sin él, un lote entero puede fallar
+            # sin que nadie sepa por qué.
+            ultimo_error = f"{type(e).__name__}: {e}"[:800]
             continue
 
     return ResultadoAnalisis(
         analisis=None, hash_contenido=hash_c,
         tokens_entrada=tokens_in, tokens_salida=tokens_out,
-        modelo=cfg.anthropic_model, fallido=True,
+        modelo=cfg.anthropic_model, fallido=True, error=ultimo_error,
     )

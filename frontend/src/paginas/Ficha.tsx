@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import {
   Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { api } from "../api";
 import { coloresGrafico, useTema } from "../tema";
 import {
-  Aviso, AvisoProvisional, BadgeCalidad, BadgeScore, Boton, Card, Chip, EsqueletoFicha,
-  IconoAviso, Vacio, fmtDinero, fmtMetrica, paso, useEsMovil,
+  Aviso, AvisoProvisional, BadgeCalidad, BadgeConfotur, BadgeScore, Boton, Card, Chip,
+  EsqueletoFicha, IconoAviso, Vacio, fmtDinero, fmtMetrica, paso, useEsMovil,
 } from "../ui";
 
 export default function Ficha() {
@@ -45,6 +45,25 @@ export default function Ficha() {
   const { inmueble, metricas, analisis, scores, historico_precios, zona } = datos;
   const noReconocidas: string[] = analisis?.senales_no_reconocidas || [];
   const zonaTuristica = zona?.perfil_zona === "TURISTICA";
+  const faltantes: string[] = metricas?.campos_faltantes || [];
+  const estadoAnalisis = datos.analisis_estado;
+
+  const fijarConfotur = async (valor: boolean | null) => {
+    setRecalculando(true);
+    try {
+      await api.put(`/api/inmuebles/${id}/confotur`, { tiene_confotur: valor });
+      await cargar();
+      setAviso(
+        valor === null
+          ? "CONFOTUR marcado como desconocido. El score vuelve a marcarse PARCIAL."
+          : `CONFOTUR ${valor ? "confirmado" : "descartado"}. Métricas y scores recalculados.`,
+      );
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRecalculando(false);
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -71,6 +90,28 @@ export default function Ficha() {
       </div>
 
       {aviso && <Aviso alCerrar={() => setAviso("")}>{aviso}</Aviso>}
+
+      {faltantes.length > 0 && <PanelFaltantes faltantes={faltantes} />}
+
+      {estadoAnalisis?.analisis_fallido && (
+        <div className="aparecer rounded-lg border border-danger/40 bg-danger/10 px-4 py-3 shadow-elev-1">
+          <div className="flex items-center gap-2 text-danger text-[13px] font-semibold uppercase tracking-wide">
+            <IconoAviso /> El análisis cualitativo falló
+          </div>
+          <p className="text-[13px] text-muted mt-1 leading-relaxed">
+            Sin análisis no hay nivel de reforma ni señales, así que el score se calcula con
+            menos componentes de los que debería.
+            {estadoAnalisis.motivo_fallo
+              ? " Motivo registrado:"
+              : " No se registró el motivo (análisis anterior a la versión que lo guarda)."}
+          </p>
+          {estadoAnalisis.motivo_fallo && (
+            <pre className="mt-1.5 whitespace-pre-wrap break-words rounded bg-base/60 p-2 text-[11px] text-danger cifra">
+              {estadoAnalisis.motivo_fallo}
+            </pre>
+          )}
+        </div>
+      )}
 
       {zonaTuristica && (
         <div className="aparecer rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 shadow-elev-1">
@@ -115,6 +156,19 @@ export default function Ficha() {
               <Dato k="Tipo anunciante" v={inmueble.tipo_anunciante || "—"} />
               <Dato k="Calidad del dato" v={<BadgeCalidad estado={inmueble.estado_calidad} />} />
             </dl>
+
+            {/* El control aparece solo donde la exención existe: lo dispara el propio
+                motor al marcar el dato como pendiente, no una lista de países en la UI. */}
+            {(faltantes.includes("tiene_confotur[desconocido]") ||
+              inmueble.tiene_confotur !== null) && (
+              <ControlConfotur
+                valor={inmueble.tiene_confotur}
+                sugerencia={analisis?.menciona_exencion_fiscal}
+                ocupado={recalculando}
+                onCambiar={fijarConfotur}
+              />
+            )}
+
             {inmueble.posible_duplicado_cross_portal && (
               <p className="text-xs text-muted mt-3">Marcado como posible duplicado en otro portal.</p>
             )}
@@ -218,6 +272,126 @@ export default function Ficha() {
           </Vacio>
         )}
       </Card>
+    </div>
+  );
+}
+
+/** CONFOTUR: lo decide el propietario, no Claude ni el sistema.
+ *
+ *  Tres estados de verdad, no dos: sí, no y *no lo sé*. «No lo sé» es el valor de
+ *  partida y no equivale a «no lo tiene» — el motor lo distingue y degrada la
+ *  calidad del dato mientras siga sin respuesta. */
+function ControlConfotur({
+  valor, sugerencia, ocupado, onCambiar,
+}: {
+  valor: boolean | null;
+  sugerencia?: string | null;
+  ocupado: boolean;
+  onCambiar: (v: boolean | null) => void;
+}) {
+  const opciones: { etiqueta: string; v: boolean | null }[] = [
+    { etiqueta: "Sí", v: true },
+    { etiqueta: "No", v: false },
+    { etiqueta: "No lo sé", v: null },
+  ];
+  return (
+    <div className="mt-3 pt-3 border-t border-line/70">
+      <div className="flex items-center justify-between gap-2 mb-1.5">
+        <span className="text-[11px] font-medium uppercase tracking-wider text-faint">
+          CONFOTUR (Ley 158-01)
+        </span>
+        {valor === true && <BadgeConfotur />}
+      </div>
+
+      <div className="inline-flex rounded-md border border-line overflow-hidden">
+        {opciones.map((o) => {
+          const activo = valor === o.v;
+          return (
+            <button
+              key={String(o.v)}
+              type="button"
+              disabled={ocupado}
+              onClick={() => onCambiar(o.v)}
+              className={`px-2.5 py-1 tactil:py-2 tactil:min-h-[44px] text-[13px] transition-colors duration-150
+                border-r border-line last:border-r-0 disabled:opacity-50 ${
+                activo ? "bg-accent text-accent-contrast font-medium" : "text-muted hover:bg-elevated hover:text-fg"
+              }`}
+            >
+              {o.etiqueta}
+            </button>
+          );
+        })}
+      </div>
+
+      <p className="text-xs text-muted mt-1.5 leading-relaxed">
+        {valor === true
+          ? "Exento del impuesto de transferencia: el coste de adquisición ya lo descuenta."
+          : valor === false
+            ? "Paga el impuesto de transferencia como cualquier otro inmueble."
+            : "Sin confirmar. El cálculo aplica el impuesto (hipótesis conservadora) y el score se queda en PARCIAL hasta que lo respondas."}
+      </p>
+
+      {sugerencia === "SI" && valor === null && (
+        <p className="text-xs text-accent mt-1.5 leading-relaxed">
+          El anuncio menciona CONFOTUR o una exención fiscal. Es una señal de lectura del
+          texto, no una confirmación: verifícalo antes de marcarlo.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Traduce `campos_faltantes` del motor a qué falta y dónde se carga.
+ *
+ *  El motor ya nombra internamente lo que le falta; lo que no había era manera de
+ *  leerlo desde la ficha. Un inmueble NO_CALCULABLE dejaba de explicar por qué. */
+function PanelFaltantes({ faltantes }: { faltantes: string[] }) {
+  const explicar = (campo: string): { texto: string; ir?: string; enlace?: string } => {
+    const dentro = campo.match(/\[(.+)\]/)?.[1] || "";
+    if (campo.startsWith("coste_reforma"))
+      return { texto: `Falta el coste de reforma (€/m²) para nivel ${dentro}`, ir: "/mercado", enlace: "Cargar costes de reforma" };
+    if (campo === "gastos_adquisicion[sin_configurar]")
+      return { texto: "No hay ningún gasto de adquisición configurado para el país", ir: "/mercado", enlace: "Cargar gastos" };
+    if (campo.startsWith("region_fiscal_no_resuelta"))
+      return { texto: `La provincia «${dentro}» no está asociada a ninguna comunidad autónoma, así que no se sabe qué ITP aplicar`, ir: "/mercado", enlace: "Revisar configuración" };
+    if (campo.startsWith("gasto_adquisicion"))
+      return { texto: `Falta el valor del gasto de adquisición «${dentro}»`, ir: "/mercado", enlace: "Cargar gastos" };
+    if (campo === "benchmark_alquiler")
+      return { texto: "Falta el €/m² de alquiler medio de la zona: sin él no hay renta ni rentabilidad", ir: "/mercado", enlace: "Cargar benchmarks" };
+    if (campo === "benchmark_venta")
+      return { texto: "Falta el €/m² de venta medio de la zona: sin él no hay descuento de mercado", ir: "/mercado", enlace: "Cargar benchmarks" };
+    if (campo === "tipo_interes_anual")
+      return { texto: "Falta el tipo de interés hipotecario del país: sin él no hay cuota ni cashflow", ir: "/mercado", enlace: "Configurar mercado" };
+    if (campo.startsWith("tipo_cambio"))
+      return { texto: `Falta el tipo de cambio ${dentro}, necesario para normalizar las divisas`, ir: "/mercado", enlace: "Cargar tipo de cambio" };
+    if (campo === "tiene_confotur[desconocido]")
+      return { texto: "Sin confirmar si el inmueble está acogido a CONFOTUR. El cálculo aplica el impuesto de transferencia mientras tanto" };
+    if (campo === "conversion_referencia")
+      return { texto: "La conversión a moneda de referencia quedó incompleta (falta una tasa)", ir: "/mercado", enlace: "Cargar tipo de cambio" };
+    if (campo === "precio") return { texto: "El anuncio no trae precio: sin él no se puede calcular nada" };
+    if (campo === "superficie") return { texto: "El anuncio no trae superficie: sin ella no se puede calcular nada" };
+    return { texto: campo };
+  };
+
+  return (
+    <div className="aparecer rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 shadow-elev-1">
+      <div className="flex items-center gap-2 text-warning text-[13px] font-semibold uppercase tracking-wide">
+        <IconoAviso /> Qué falta para puntuar este inmueble
+      </div>
+      <ul className="mt-2 space-y-1.5">
+        {faltantes.map((c) => {
+          const e = explicar(c);
+          return (
+            <li key={c} className="flex flex-wrap items-baseline gap-x-2 text-[13px] text-muted leading-relaxed">
+              <span className="text-faint cifra text-[11px] shrink-0">{c}</span>
+              <span>{e.texto}.</span>
+              {e.ir && (
+                <Link to={e.ir} className="text-accent hover:underline">{e.enlace} →</Link>
+              )}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

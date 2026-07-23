@@ -106,6 +106,10 @@ class Inmueble(ModeloBase):
     fecha_publicacion: datetime | None = None
     gastos_comunidad_mes: Decimal | None = None
     estado_calidad: CalidadDato | None = None
+    # Ley 158-01 CONFOTUR (RD): exime del impuesto de transferencia y del IPI.
+    # None = DESCONOCIDO, que NO es False: el motor lo refleja en la calidad del
+    # dato en vez de asumir que el inmueble paga. Lo fija el propietario.
+    tiene_confotur: bool | None = None
     posible_duplicado_cross_portal: bool = False  # 3A
     inmuebles_duplicados_ids: list[UUID] = Field(default_factory=list)
     primer_visto: datetime | None = None

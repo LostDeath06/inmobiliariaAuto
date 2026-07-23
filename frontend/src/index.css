@@ -45,8 +45,11 @@
   --elevated: 220 13% 14%;
   --line: 220 12% 19%;
   --fg: 210 17% 91%;
-  --muted: 215 12% 60%;
-  --faint: 216 10% 40%;
+  --muted: 215 12% 66%;
+  /* Subido de 40% a 52%: a 40% el texto secundario quedaba en ~3:1 sobre la
+     superficie, ilegible en una pantalla donde se deciden compras. Mismo tono y
+     saturación (la paleta no cambia), solo deja de ser un gris fantasma. */
+  --faint: 216 12% 52%;
   --accent: 205 90% 60%;
   --accent-contrast: 210 40% 98%;
   --positive: 162 52% 46%;
@@ -86,10 +89,10 @@
     outline-offset: 2px;
     border-radius: 4px;
   }
-  /* Móvil y tablet: iOS hace zoom automático al enfocar un campo de menos de
-     16px, y el iPad en vertical (768px) también. El corte va con `lg`, igual
-     que la densidad táctil y que el cambio de tabla a tarjetas del ranking. */
-  @media (max-width: 1023px) {
+  /* iOS hace zoom automático al enfocar un campo de menos de 16px (también el
+     iPad). Va por tipo de puntero, no por ancho: una ventana de escritorio
+     estrecha no zoomea, y subirle la tipografía solo la afeaba. */
+  @media (pointer: coarse) {
     input,
     select,
     textarea {
@@ -143,12 +146,12 @@
   }
 
   /* Controles de formulario: heredan el tema sin repetir clases por página.
-     Hasta 1024px el alto mínimo es 44px (área táctil cómoda, tablet incluida);
-     de ahí para arriba vuelve a la densidad compacta del terminal. */
+     La densidad de base es la compacta del terminal; solo en dispositivos que
+     se manejan con el dedo crece a 44px. */
   .campo {
-    @apply bg-elevated border border-line rounded-md px-3 py-2 text-fg
-      min-h-[44px] lg:min-h-0 lg:px-2.5 lg:py-1.5 lg:text-sm
-      placeholder:text-faint outline-none
+    @apply bg-elevated border border-line rounded-md px-2.5 py-1.5 text-sm text-fg
+      tactil:min-h-[44px] tactil:px-3 tactil:py-2 tactil:text-base
+      placeholder:text-muted outline-none
       focus:border-accent focus:ring-2 focus:ring-accent/25;
     transition: border-color 150ms var(--sal), box-shadow 150ms var(--sal),
       background-color 150ms var(--sal);
@@ -165,7 +168,7 @@
 
   /* Sliders manejables con el dedo: pista visible y pulgar grande en táctil. */
   input[type="range"] {
-    @apply w-full cursor-pointer appearance-none bg-transparent h-11 lg:h-6;
+    @apply w-full cursor-pointer appearance-none bg-transparent h-6 tactil:h-11;
   }
   input[type="range"]::-webkit-slider-runnable-track {
     @apply h-1.5 rounded-full;
@@ -174,11 +177,18 @@
   input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    @apply h-6 w-6 lg:h-4 lg:w-4 rounded-full border-0;
+    @apply h-4 w-4 tactil:h-6 tactil:w-6 rounded-full border-0;
     background: hsl(var(--accent));
-    margin-top: -9px;
+    margin-top: -5px;
     box-shadow: var(--sombra-1);
     transition: transform 150ms var(--sal), box-shadow 150ms var(--sal);
+  }
+  /* El pulgar se centra sobre una pista de 6px: (6 − alto) / 2. Con el dedo el
+     pulgar es de 24px, así que el desplazamiento cambia. */
+  @media (pointer: coarse) {
+    input[type="range"]::-webkit-slider-thumb {
+      margin-top: -9px;
+    }
   }
   input[type="range"]:hover::-webkit-slider-thumb {
     transform: scale(1.12);
@@ -195,7 +205,7 @@
     background: hsl(var(--line));
   }
   input[type="range"]::-moz-range-thumb {
-    @apply h-6 w-6 lg:h-4 lg:w-4 rounded-full border-0;
+    @apply h-4 w-4 tactil:h-6 tactil:w-6 rounded-full border-0;
     background: hsl(var(--accent));
   }
 

@@ -7,6 +7,7 @@ import { ProveedorTema } from "./tema";
 import ConfigMercado from "./paginas/ConfigMercado";
 import EstadoConfig from "./paginas/EstadoConfig";
 import Ficha from "./paginas/Ficha";
+import Inventario from "./paginas/Inventario";
 import Jobs from "./paginas/Jobs";
 import Perfiles from "./paginas/Perfiles";
 import Portales from "./paginas/Portales";
@@ -18,6 +19,7 @@ const router = createBrowserRouter([
     element: <App />,
     children: [
       { index: true, element: <Ranking /> },
+      { path: "inventario", element: <Inventario /> },
       { path: "inmueble/:id", element: <Ficha /> },
       { path: "perfiles", element: <Perfiles /> },
       { path: "mercado", element: <ConfigMercado /> },

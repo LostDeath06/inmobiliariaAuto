@@ -23,7 +23,7 @@ from decimal import Decimal
 
 from ..modelos.enumeraciones import CalidadDato
 
-VERSION_MOTOR = "motor-financiero-1.1.0"
+VERSION_MOTOR = "motor-financiero-1.2.0"  # 1.2.0: exención de gastos (CONFOTUR)
 
 _CERO = Decimal(0)
 _UNO = Decimal(1)
@@ -36,12 +36,17 @@ class GastoAdquisicionEntrada:
 
     `moneda` solo importa para FIJO (importe absoluto). PORCENTAJE se aplica al
     precio (ya en moneda de cálculo), así que es agnóstico a divisa.
+
+    `exento_confotur` viene de la configuración, no de aquí: el motor no sabe qué
+    es un impuesto de transferencia ni qué es CONFOTUR. Solo sabe que hay gastos
+    marcados como exentos y que, si el inmueble está acogido, no se suman.
     """
 
     concepto: str
     tipo: str
     valor: Decimal | None
     moneda: str | None = None
+    exento_confotur: bool = False
 
 
 @dataclass(frozen=True)
@@ -71,6 +76,11 @@ class EntradaFinanciera:
     moneda_benchmark: str | None = None       # moneda de los precios/m² de zona
     # Mapa de tasas (origen, destino) -> tasa. Lo provee el servicio desde BD.
     tasas: dict[tuple[str, str], Decimal] = field(default_factory=dict)
+    # --- Exención fiscal (CONFOTUR en RD, pero el motor no conoce el nombre) ---
+    # None = DESCONOCIDO. No es False: si hay gastos marcados como exentos y no
+    # sabemos si el inmueble está acogido, el coste calculado puede estar inflado,
+    # y eso degrada la calidad del dato en vez de pasar desapercibido.
+    tiene_confotur: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -164,7 +174,10 @@ def calcular_metricas(e: EntradaFinanciera) -> ResultadoFinanciero:
     for g in e.gastos_adquisicion:
         if g.tipo == "FIJO":
             gastos_norm.append(
-                GastoAdquisicionEntrada(g.concepto, g.tipo, _norm(g.valor, g.moneda), e.moneda_calculo)
+                GastoAdquisicionEntrada(
+                    g.concepto, g.tipo, _norm(g.valor, g.moneda), e.moneda_calculo,
+                    g.exento_confotur,
+                )
             )
         else:  # PORCENTAJE: agnóstico a divisa
             gastos_norm.append(g)
@@ -200,7 +213,16 @@ def calcular_metricas(e: EntradaFinanciera) -> ResultadoFinanciero:
     # --- Gastos de adquisición ----------------------------------------------
     gastos_total: Decimal | None = _CERO
     detalle_gastos = {}
+    # ¿Hay algún concepto que una exención podría eximir? Es lo que decide si el
+    # desconocimiento importa: sin conceptos exentos configurados, da igual.
+    hay_exenciones = any(g.exento_confotur for g in gastos_norm)
+    exento = e.tiene_confotur is True
     for g in gastos_norm:
+        if g.exento_confotur and exento:
+            # Acogido a la exención: este concepto no se paga. Se deja constancia
+            # en la auditoría (0 explícito) en vez de desaparecer de la cuenta.
+            detalle_gastos[g.concepto] = "0 (exento)"
+            continue
         if g.valor is None:
             faltantes.append(f"gasto_adquisicion[{g.concepto}]")
             gastos_total = None
@@ -212,6 +234,11 @@ def calcular_metricas(e: EntradaFinanciera) -> ResultadoFinanciero:
     if not gastos_norm:
         gastos_total = None
         faltantes.append("gastos_adquisicion[sin_configurar]")
+    # Desconocido NO es "no tiene": el total se calcula aplicando el gasto (la
+    # hipótesis conservadora, la que no infla el ROI), pero el inmueble no puede
+    # presentarse como COMPLETO mientras no se confirme.
+    if hay_exenciones and e.tiene_confotur is None:
+        faltantes.append("tiene_confotur[desconocido]")
     if gastos_total is not None:
         registrar(
             "gastos_adquisicion_total", gastos_total, "Σ gastos (% × precio | fijo)",

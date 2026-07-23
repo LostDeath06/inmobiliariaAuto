@@ -4,6 +4,7 @@ import { useTema } from "./tema";
 
 const enlaces = [
   { a: "/", t: "Ranking" },
+  { a: "/inventario", t: "Inventario" },
   { a: "/estado", t: "Estado por país" },
   { a: "/perfiles", t: "Perfiles" },
   { a: "/mercado", t: "Configuración" },

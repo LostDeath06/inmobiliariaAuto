@@ -46,7 +46,9 @@ async def procesar_inmueble(inmueble_id: UUID) -> dict:
     hash_previo = await repo_analisis.obtener_hash(inmueble_id)
     if hash_previo != resultado.hash_contenido:
         if resultado.fallido or resultado.analisis is None:
-            await repo_analisis.marcar_fallido(inmueble_id, resultado.modelo)
+            await repo_analisis.marcar_fallido(
+                inmueble_id, resultado.modelo, resultado.error
+            )
         else:
             await repo_analisis.guardar(
                 inmueble_id, resultado.analisis,
@@ -66,29 +68,62 @@ async def procesar_inmueble(inmueble_id: UUID) -> dict:
     await calculo_scoring.calcular_todos_los_perfiles(inmueble_id)
 
     return {"inmueble": str(inmueble_id), "tokens_entrada": tokens_in,
-            "tokens_salida": tokens_out, "analisis_fallido": resultado.fallido}
+            "tokens_salida": tokens_out, "analisis_fallido": resultado.fallido,
+            "motivo_fallo": resultado.error}
 
 
 async def procesar_inmuebles(ids: list[UUID], job_id: UUID | None = None) -> dict:
     """Procesa una lista de inmuebles y acumula tokens/coste en el job."""
     tokens_in = tokens_out = 0
     fallidos = 0
+    motivos: list[str] = []
     for inmueble_id in ids:
         r = await procesar_inmueble(inmueble_id)
         tokens_in += r.get("tokens_entrada", 0)
         tokens_out += r.get("tokens_salida", 0)
         if r.get("analisis_fallido"):
             fallidos += 1
+            motivo = r.get("motivo_fallo")
+            if motivo and motivo not in motivos:
+                motivos.append(motivo)
 
     if job_id is not None:
         coste = (Decimal(tokens_in) / Decimal(1_000_000) * _USD_ENTRADA_POR_M
                  + Decimal(tokens_out) / Decimal(1_000_000) * _USD_SALIDA_POR_M)
-        await repo_jobs.actualizar(job_id, {
+        cambios: dict = {
             "tokens_entrada": tokens_in, "tokens_salida": tokens_out,
             "coste_estimado_usd": coste,
-        })
+        }
+        # Un coste de 0 con análisis fallidos significa que ni siquiera se llegó a
+        # llamar a la API. Se escribe el motivo en el job para que salga en el
+        # Monitor, en vez de dejar un 0.0000 mudo que obliga a mirar los logs.
+        if fallidos:
+            resumen = (
+                f"{fallidos} de {len(ids)} análisis fallaron"
+                + (" (0 tokens consumidos: la llamada a la API no llegó a completarse)"
+                   if tokens_in == 0 else "")
+                + (". Motivos: " + " | ".join(motivos[:3]) if motivos else "")
+            )
+            cambios["error_mensaje"] = resumen[:2000]
+        await repo_jobs.actualizar(job_id, cambios)
     return {"procesados": len(ids), "analisis_fallidos": fallidos,
+            "motivos_fallo": motivos,
             "tokens_entrada": tokens_in, "tokens_salida": tokens_out}
+
+
+async def reprocesar_sin_analisis(limite: int = 500) -> dict:
+    """Reprocesa los inmuebles sin análisis o con análisis fallido.
+
+    El análisis NO se salta cuando falta configuración de mercado: `procesar_inmueble`
+    lo intenta siempre, antes de las métricas. Así que un inmueble sin análisis es
+    un análisis que FALLÓ (API caída, clave mala, JSON inválido), no uno pendiente.
+    Esto lo reintenta en lote sin tocar los que ya salieron bien.
+    """
+    ids = await repo_analisis.listar_sin_analisis(limite)
+    if not ids:
+        return {"pendientes": 0, "procesados": 0, "analisis_fallidos": 0}
+    resultado = await procesar_inmuebles(ids)
+    return {"pendientes": len(ids), **resultado}
 
 
 async def recalcular_inmueble(inmueble_id: UUID) -> dict:

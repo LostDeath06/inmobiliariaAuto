@@ -58,7 +58,7 @@ export default function Perfiles() {
           <button
             key={p.id}
             onClick={() => elegir(p)}
-            className={`shrink-0 px-3 min-h-[44px] lg:min-h-0 lg:py-1.5 rounded-md text-sm lg:text-[13px] font-medium
+            className={`shrink-0 px-3 py-1.5 tactil:py-0 tactil:min-h-[44px] rounded-md text-[13px] tactil:text-sm font-medium
               transition-[background-color,color,border-color,box-shadow] duration-150 ${
               sel.id === p.id
                 ? "bg-elevated text-fg border border-line shadow-elev-1"

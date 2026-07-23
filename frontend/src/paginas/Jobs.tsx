@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
-import { Aviso, Boton, Card, Chip, IconoAviso, Vacio, paso } from "../ui";
+import { Aviso, Boton, Card, Chip, IconoAviso, Vacio, fmtDuracion, fmtFechaHora, paso } from "../ui";
 
 const TONO_ESTADO: Record<string, string> = {
   COMPLETADO: "text-positive border-positive/30 bg-positive/10",
@@ -85,6 +85,25 @@ export default function Jobs() {
   const [msg, setMsg] = useState("");
   const [msgTono, setMsgTono] = useState<"positive" | "danger">("positive");
   const [ingestando, setIngestando] = useState(false);
+  const [reprocesando, setReprocesando] = useState(false);
+  const [avisoReproceso, setAvisoReproceso] = useState("");
+
+  const reprocesar = async () => {
+    setReprocesando(true);
+    try {
+      const r = await api.post("/api/pipeline/reprocesar-sin-analisis");
+      setAvisoReproceso(
+        r.pendientes === 0
+          ? "No hay ningún inmueble sin análisis: todos tienen el suyo."
+          : `${r.pendientes} inmuebles reprocesados · ${r.analisis_fallidos} siguen fallando` +
+            (r.motivos_fallo?.length ? ` · ${r.motivos_fallo[0]}` : ""),
+      );
+    } catch (e) {
+      setAvisoReproceso(`Error: ${e}`);
+    } finally {
+      setReprocesando(false);
+    }
+  };
 
   const cargar = () => {
     api.get("/api/jobs").then(setJobs).catch(() => {});
@@ -142,6 +161,32 @@ export default function Jobs() {
         </Card>
       )}
 
+      <Card
+        titulo="Reprocesar análisis"
+        subtitulo="para los inmuebles cuyo análisis cualitativo falló"
+        acciones={
+          <Boton variante="secundario" cargando={reprocesando} onClick={reprocesar}>
+            {reprocesando ? "Reprocesando" : "Reprocesar sin análisis"}
+          </Boton>
+        }
+      >
+        <p className="text-[13px] text-muted leading-relaxed">
+          El análisis cualitativo se intenta <strong className="text-fg font-medium">siempre</strong>,
+          antes de las métricas y sin depender de la configuración de mercado. Así que un
+          inmueble sin análisis es uno cuyo análisis <em>falló</em> (API caída, clave incorrecta,
+          JSON inválido), no uno pendiente de que cargues datos. Esto lo reintenta en lote,
+          sin volver a pedirle nada a OpenClaw.
+        </p>
+        {avisoReproceso && (
+          <div className="mt-3">
+            <Aviso tono={avisoReproceso.startsWith("Error") ? "danger" : "positive"}
+                   alCerrar={() => setAvisoReproceso("")}>
+              {avisoReproceso}
+            </Aviso>
+          </div>
+        )}
+      </Card>
+
       {noReconocidas.length > 0 && (
         <Card
           titulo="Señales fuera de catálogo"
@@ -170,6 +215,8 @@ export default function Jobs() {
               <thead>
                 <tr>
                   <th>Estado</th>
+                  <th>Inicio</th>
+                  <th className="text-right">Duración</th>
                   <th className="text-right">Válidos</th>
                   <th className="text-right">Cuar.</th>
                   <th className="text-right">Coste USD</th>
@@ -187,6 +234,12 @@ export default function Jobs() {
                         </div>
                       )}
                     </td>
+                    <td className="cifra text-muted text-xs whitespace-nowrap">
+                      {fmtFechaHora(j.iniciado_en || j.created_at)}
+                    </td>
+                    <td className="text-right cifra text-muted text-xs whitespace-nowrap">
+                      {fmtDuracion(j.iniciado_en || j.created_at, j.finalizado_en)}
+                    </td>
                     <td className="text-right cifra text-fg">{j.total_anuncios_validos ?? "—"}</td>
                     <td className="text-right cifra text-muted">{j.total_anuncios_cuarentena ?? "—"}</td>
                     <td className="text-right cifra text-muted">{j.coste_estimado_usd ? Number(j.coste_estimado_usd).toFixed(4) : "—"}</td>
@@ -195,7 +248,7 @@ export default function Jobs() {
                 ))}
                 {jobs.length === 0 && (
                   <tr>
-                    <td colSpan={5}>
+                    <td colSpan={7}>
                       <Vacio titulo="Sin jobs todavía">
                         Un job se crea al ejecutar una búsqueda en «Portales». Aquí se verá su estado,
                         cuántos anuncios entraron y cuántos cayeron en cuarentena.
@@ -220,7 +273,15 @@ export default function Jobs() {
               titulo="Modo manual · prompt para OpenClaw"
               acciones={<Boton variante="secundario" onClick={() => navigator.clipboard.writeText(prompt)}>Copiar</Boton>}
             >
-              <textarea readOnly value={prompt} className="campo w-full h-40 font-mono text-base md:text-xs resize-none" />
+              {/* `text-fg` explícito: el prompt es para leerlo y copiarlo, no un
+                  dato secundario. Antes heredaba un gris de bajo contraste que lo
+                  dejaba prácticamente ilegible sobre el fondo oscuro. */}
+              <textarea
+                readOnly
+                value={prompt}
+                spellCheck={false}
+                className="campo w-full h-48 font-mono !text-xs leading-relaxed text-fg resize-y"
+              />
             </Card>
 
             <Card titulo="Pegar JSON de vuelta">
@@ -228,7 +289,8 @@ export default function Jobs() {
                 value={pegado}
                 onChange={(e) => setPegado(e.target.value)}
                 placeholder="Pega aquí el JSON que devuelve OpenClaw"
-                className="campo w-full h-40 font-mono text-base md:text-xs resize-none"
+                spellCheck={false}
+                className="campo w-full h-48 font-mono !text-xs leading-relaxed text-fg resize-y"
               />
               <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-3">
                 <Boton cargando={ingestando} onClick={enviarManual}>

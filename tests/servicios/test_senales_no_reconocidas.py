@@ -36,6 +36,8 @@ def _analisis(**overrides) -> AnalisisCualitativo:
         apto_alquiler_larga_estancia=AptoTernario.SI,
         apto_alquiler_turistico=AptoTernario.NO,
         potencial_division_horizontal=AptoTernario.NO,
+        # DUDOSO = el anuncio no dice nada de CONFOTUR, que es lo normal fuera de RD.
+        menciona_exencion_fiscal=AptoTernario.DUDOSO,
         calidad_descripcion=CalidadDescripcion.ESTANDAR,
         coherencia_precio_descripcion=CoherenciaPrecio.COHERENTE,
         resumen_analista="Piso correcto.",

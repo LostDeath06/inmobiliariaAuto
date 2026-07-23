@@ -1,3 +1,5 @@
+import plugin from "tailwindcss/plugin";
+
 /** @type {import('tailwindcss').Config} */
 export default {
   darkMode: "class",
@@ -59,5 +61,16 @@ export default {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    // `tactil:` = el dispositivo apunta con el dedo, no con un ratón.
+    //
+    // El ancho de pantalla NO sirve para decidir el tamaño de los controles: una
+    // ventana de escritorio a 900px no es una tablet, y con un breakpoint por
+    // ancho recibía botones de 44px y una densidad absurda. `pointer: coarse`
+    // pregunta lo que de verdad importa — si se pulsa con el dedo — así que el
+    // iPad los recibe y el escritorio estrecho no.
+    plugin(({ addVariant }) => {
+      addVariant("tactil", "@media (pointer: coarse)");
+    }),
+  ],
 };

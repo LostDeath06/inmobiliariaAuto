@@ -94,7 +94,26 @@ async def establecer_gasto(body: dict):
         pais=body["pais"], region=body.get("region", ""), concepto=body["concepto"],
         tipo=body["tipo"], valor=_dec(body.get("valor")), moneda=body.get("moneda"),
         fuente=body.get("fuente"),
+        # Qué conceptos exime CONFOTUR es dato, no código (Principio 2).
+        exento_confotur=bool(body.get("exento_confotur", False)),
     )
+
+
+# --- Regiones fiscales (mapa provincia → comunidad autónoma) -----------------
+
+
+@router.get("/regiones-fiscales")
+async def listar_regiones(pais: str | None = None):
+    return await config_mercado.listar_regiones_fiscales(pais)
+
+
+@router.put("/regiones-fiscales")
+async def establecer_region(body: dict):
+    await config_mercado.establecer_region_fiscal(
+        pais=body["pais"], provincia=body["provincia"], region=body["region"],
+        fuente=body.get("fuente"),
+    )
+    return {"ok": True}
 
 
 # --- Benchmarks de zona ------------------------------------------------------
