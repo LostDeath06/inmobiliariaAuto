@@ -36,7 +36,7 @@ export default function ConfigMercado() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <label className="etiqueta mb-0">País</label>
         <select value={pais} onChange={(e) => setPais(e.target.value)} className="campo">
           {PAISES.map((p) => <option key={p}>{p}</option>)}
@@ -45,7 +45,7 @@ export default function ConfigMercado() {
       </div>
 
       <Card titulo={`Costes de reforma · ${pais}`} subtitulo="€/m² por nivel de reforma">
-        <div className="overflow-x-auto">
+        <div className="tabla-scroll">
           <table>
             <thead><tr><th>Nivel</th><th className="text-right">Coste/m²</th><th>Moneda</th></tr></thead>
             <tbody>
@@ -71,7 +71,7 @@ export default function ConfigMercado() {
         {gastos.length === 0 ? (
           <div className="text-[13px] text-warning">Sin conceptos configurados. Añádelos (ITP, notaría, registro…).</div>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="tabla-scroll">
             <table>
               <thead><tr><th>Concepto</th><th>Tipo</th><th className="text-right">Valor</th><th>Moneda</th></tr></thead>
               <tbody>
@@ -93,7 +93,7 @@ export default function ConfigMercado() {
         {benchmarks.length === 0 ? (
           <div className="text-[13px] text-warning">Sin benchmarks de zona cargados.</div>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="tabla-scroll">
             <table>
               <thead><tr><th>Ciudad</th><th>Barrio</th><th className="text-right">€/m² venta</th><th className="text-right">€/m² alquiler</th></tr></thead>
               <tbody>
@@ -126,9 +126,10 @@ export default function ConfigMercado() {
 
 function Campo({ l, v, on, ph }: { l: string; v: string; on: (v: string) => void; ph?: string }) {
   return (
-    <div>
+    // En móvil cada campo ocupa media fila (dos por línea); en escritorio, ancho fijo.
+    <div className="flex-1 min-w-[7.5rem] sm:flex-none">
       <label className="etiqueta">{l}</label>
-      <input value={v} placeholder={ph} onChange={(e) => on(e.target.value)} className="campo w-28 cifra" />
+      <input value={v} placeholder={ph} onChange={(e) => on(e.target.value)} className="campo w-full sm:w-28 cifra" />
     </div>
   );
 }

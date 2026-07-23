@@ -179,26 +179,113 @@ solo**, sin que tengas que entrar por SSH.
 
 ---
 
-## 6. Activar OpenClaw cuando lo montes (aún NO)
+## 6. Conectar OpenClaw (adaptador + activación)
 
-Hoy está en `OPENCLAW_MODE=manual`. Cuando OpenClaw esté vivo en el VPS:
+OpenClaw corre en el **host** (fuera de Docker) con su Gateway en
+`ws://127.0.0.1:18789`. El backend no lo invoca directamente: entre medias va el
+**adaptador** (`scripts/adaptador_openclaw_vps.py`), un servicio HTTP que traduce
+cada job a una ejecución real del agente.
+
+### 6.1 Cómo se invoca OpenClaw (y por qué así)
+
+El adaptador usa el **CLI**: `openclaw agent --message-file … --json --timeout …`,
+que la documentación describe como *"runs a single agent turn through the Gateway…
+executes non-interactively to completion, then returns results to stdout"*.
+
+Se eligió frente a hablar el WebSocket del Gateway (`chat.send`) porque:
+- Está pensado literalmente para ejecución no interactiva hasta completar.
+- Separa stdout de stderr, para que un script pueda parsear stdout directamente.
+- Trae `--timeout` propio, y `--message-file` evita límites de longitud de
+  argumento con prompts largos.
+- Pasa igualmente por el Gateway, pero absorbe el handshake y el versionado del
+  protocolo. Hacerlo a mano obligaría a seguir el stream de eventos y a depender
+  de la forma exacta de `session.operation`, **que la documentación pública no
+  detalla**. Menos superficie que se rompa.
+
+### 6.2 El system prompt del contrato: se inyecta en cada llamada
+
+No hay que pegarlo en la configuración de OpenClaw. El adaptador **lee
+`docs/PROMPT_PARA_OPENCLAW.md` y lo antepone al prompt de cada job**. Así el
+contrato viaja versionado con el repo: si cambia el formato de salida, basta un
+`git pull` y no hay riesgo de que la config del VPS quede desincronizada.
+
+### 6.3 Instalar el adaptador como servicio
 
 ```bash
-nano .env
-#   OPENCLAW_MODE=http
-#   OPENCLAW_BASE_URL=http://host.docker.internal:8080     ← ajusta el puerto
-#   OPENCLAW_API_KEY=...                                    ← si tu adaptador lo exige
-docker compose up -d --force-recreate backend worker
+# 1. Dependencias (en el host, fuera de Docker)
+sudo apt update && sudo apt install -y python3-pip
+sudo pip3 install --break-system-packages fastapi uvicorn
+
+# 2. Comprobar que el CLI está y responde
+which openclaw && openclaw --version
+
+# 3. Ver el envoltorio REAL que devuelve --json en TU instalación
+cd /root/inmobiliariaAuto/scripts
+python3 adaptador_openclaw_vps.py --sonda "responde solo con {\"ok\":true}"
+
+# 4. Instalar la unidad systemd
+sudo cp openclaw-adaptador.service /etc/systemd/system/
+sudo nano /etc/systemd/system/openclaw-adaptador.service   # pon OPENCLAW_API_KEY
+sudo systemctl daemon-reload
+sudo systemctl enable --now openclaw-adaptador
+systemctl status openclaw-adaptador
+
+# 5. Comprobar
+curl -H "Authorization: Bearer TU_TOKEN" http://127.0.0.1:8080/health
 ```
 
-> **El matiz que rompe esto si no lo sabes:** dentro de un contenedor, `localhost`
-> es el **propio contenedor**, no el VPS. Si OpenClaw corre en el host (fuera de
-> Docker), la dirección correcta es `host.docker.internal`, ya cableada en
-> `docker-compose.yml` con `extra_hosts`. Si en cambio metes OpenClaw como un
-> servicio más del compose, usa el nombre del servicio (`http://openclaw:8080`).
+El paso 3 importa: **el esquema del envoltorio de `--json` no está documentado**.
+El adaptador no asume ninguna clave (busca el objeto del contrato §5.4 venga plano,
+anidado o dentro de un bloque markdown), pero la sonda te enseña la forma real por
+si hiciera falta ajustar algo.
 
-Comprobación: `curl -u admin:TU_PASSWORD http://localhost/api/salud` debe mostrar
-`"openclaw": {"modo": "http", "disponible": true}`.
+### 6.4 Seguridad del puerto 8080
+
+El adaptador escucha en `0.0.0.0:8080` **porque el backend vive en Docker** y entra
+por `host.docker.internal`; con `127.0.0.1` el contenedor no llegaría. Eso lo deja
+alcanzable desde fuera, así que **ciérralo en el cortafuegos**:
+
+```bash
+sudo ufw deny 8080/tcp        # nadie desde internet
+sudo ufw allow from 172.16.0.0/12 to any port 8080 proto tcp   # solo redes Docker
+sudo ufw status
+```
+
+Además el adaptador exige `Authorization: Bearer <OPENCLAW_API_KEY>` si la defines
+(hazlo), y debe coincidir con la del `.env` del backend.
+
+### 6.5 Activar el modo http en el backend
+
+```bash
+cd /root/inmobiliariaAuto
+nano .env
+#   OPENCLAW_MODE=http
+#   OPENCLAW_BASE_URL=http://host.docker.internal:8080
+#   OPENCLAW_API_KEY=el-mismo-token-del-servicio
+docker compose --profile vps up -d --force-recreate backend worker
+```
+
+> **El matiz de red:** dentro de un contenedor `localhost` es el **propio
+> contenedor**, no el VPS. Como OpenClaw y el adaptador corren en el host, la
+> dirección correcta es `host.docker.internal`, ya cableada en
+> `docker-compose.yml` con `extra_hosts: host-gateway`. **Este montaje sigue siendo
+> el correcto.** Si algún día metes OpenClaw como servicio del compose, cambia a
+> `http://openclaw:8080`.
+
+Comprobación final: `curl -u admin:TU_PASSWORD http://localhost/api/salud` debe
+mostrar `"openclaw": {"modo": "http", "disponible": true}`. A partir de ahí, el
+worker despacha las búsquedas con cron y el ciclo se cierra solo.
+
+### 6.6 Si un job falla
+
+```bash
+journalctl -u openclaw-adaptador -f          # qué pasó en el adaptador
+curl -H "Authorization: Bearer TU_TOKEN" http://127.0.0.1:8080/jobs/<job_id>
+```
+
+El adaptador **nunca inventa datos**: si OpenClaw sale con error, si la salida no
+trae el JSON del contrato o si no valida contra §5.4, el job queda `FALLIDO` con el
+motivo y `resultado` vacío. En la app lo verás en el Monitor.
 
 ---
 

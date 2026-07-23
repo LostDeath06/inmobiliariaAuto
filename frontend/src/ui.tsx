@@ -1,4 +1,20 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+
+/** ¿Estamos en pantalla estrecha? Para lo que CSS no puede resolver solo
+ *  (props de recharts, cambiar tabla por tarjetas). Presentación, nada más. */
+export function useEsMovil(ancho = 768) {
+  const [esMovil, setEsMovil] = useState(
+    () => typeof window !== "undefined" && window.innerWidth < ancho,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${ancho - 1}px)`);
+    const alCambiar = () => setEsMovil(mq.matches);
+    alCambiar();
+    mq.addEventListener("change", alCambiar);
+    return () => mq.removeEventListener("change", alCambiar);
+  }, [ancho]);
+  return esMovil;
+}
 
 /* Primitivas de UI del terminal. Sobrias por diseño: escala de grises + un acento
    frío + estados semánticos de baja saturación. Sin sombras llamativas ni adornos. */
@@ -19,17 +35,17 @@ export function Card({
   return (
     <section className={`bg-surface border border-line rounded-lg ${className}`}>
       {(titulo || acciones) && (
-        <header className="flex items-center justify-between gap-3 px-4 h-11 border-b border-line">
+        <header className="flex items-center justify-between gap-3 px-3 md:px-4 min-h-[44px] md:h-11 py-2 md:py-0 border-b border-line">
           <div className="min-w-0">
             {titulo && (
-              <h2 className="text-[13px] font-semibold text-fg tracking-tight truncate">{titulo}</h2>
+              <h2 className="text-sm md:text-[13px] font-semibold text-fg tracking-tight truncate">{titulo}</h2>
             )}
             {subtitulo && <p className="text-[11px] text-faint truncate">{subtitulo}</p>}
           </div>
           {acciones && <div className="flex items-center gap-2 shrink-0">{acciones}</div>}
         </header>
       )}
-      <div className="p-4">{children}</div>
+      <div className="p-3 md:p-4">{children}</div>
     </section>
   );
 }
@@ -41,6 +57,7 @@ export function Boton({
   tipo = "button",
   disabled,
   title,
+  className = "",
 }: {
   children: ReactNode;
   onClick?: () => void;
@@ -48,6 +65,7 @@ export function Boton({
   tipo?: "button" | "submit";
   disabled?: boolean;
   title?: string;
+  className?: string;
 }) {
   const estilos = {
     primario: "bg-accent text-accent-contrast hover:bg-accent/90",
@@ -61,7 +79,7 @@ export function Boton({
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] font-medium transition disabled:opacity-40 disabled:cursor-not-allowed ${estilos}`}
+      className={`inline-flex items-center justify-center gap-1.5 px-4 md:px-3 min-h-[44px] md:min-h-0 md:py-1.5 rounded-md text-sm md:text-[13px] font-medium transition disabled:opacity-40 disabled:cursor-not-allowed ${estilos} ${className}`}
     >
       {children}
     </button>
@@ -202,7 +220,7 @@ export function Interruptor({
       aria-checked={activo}
       title={title}
       onClick={() => onCambiar(!activo)}
-      className="inline-flex items-center gap-2 text-[13px] text-muted hover:text-fg transition select-none"
+      className="inline-flex items-center gap-2.5 text-sm md:text-[13px] text-muted hover:text-fg transition select-none min-h-[44px] md:min-h-0 py-2 md:py-0"
     >
       <span className={`relative h-4 w-7 rounded-full transition-colors ${activo ? "bg-accent" : "bg-line"}`}>
         <span

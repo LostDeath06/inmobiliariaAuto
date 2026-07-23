@@ -1,0 +1,56 @@
+# =============================================================================
+#  Adaptador OpenClaw — unidad systemd (VPS Ubuntu 24.04)
+#
+#  Instalación:
+#     sudo cp scripts/openclaw-adaptador.service /etc/systemd/system/
+#     sudo nano /etc/systemd/system/openclaw-adaptador.service   # revisa rutas y token
+#     sudo systemctl daemon-reload
+#     sudo systemctl enable --now openclaw-adaptador
+#
+#  Ver estado y logs:
+#     systemctl status openclaw-adaptador
+#     journalctl -u openclaw-adaptador -f
+# =============================================================================
+[Unit]
+Description=Adaptador HTTP de OpenClaw para Sourcing Inmobiliario
+Documentation=file:///root/inmobiliariaAuto/DESPLIEGUE.md
+# El adaptador invoca el CLI, que habla con el Gateway: que arranque después.
+After=network-online.target openclaw-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# OpenClaw está instalado y configurado bajo root (/root/.openclaw). El adaptador
+# corre como el mismo usuario para compartir esa configuración y sesión.
+User=root
+WorkingDirectory=/root/inmobiliariaAuto/scripts
+
+# --- Configuración ---------------------------------------------------------
+# Debe coincidir con OPENCLAW_API_KEY del .env del backend.
+Environment=OPENCLAW_API_KEY=CAMBIA_ESTE_TOKEN
+# Ruta del binario (déjalo así si `which openclaw` lo encuentra).
+Environment=OPENCLAW_BIN=openclaw
+# Contrato §5.4 que se inyecta en cada llamada (versionado en el repo).
+Environment=OPENCLAW_CONTRATO_PATH=/root/inmobiliariaAuto/docs/PROMPT_PARA_OPENCLAW.md
+# Tope por job. El CLI recibe este --timeout; el adaptador corta a los +60s.
+Environment=OPENCLAW_TIMEOUT_SEGUNDOS=900
+# Scraping en serie: 1 evita que varios navegadores se peleen por la máquina.
+Environment=OPENCLAW_MAX_CONCURRENTES=1
+# Opcionales: agente y modelo concretos (si se dejan vacíos, usa la config del VPS).
+# Environment=OPENCLAW_AGENT_ID=
+# Environment=OPENCLAW_MODELO=anthropic/claude-sonnet-5
+# El CLI de OpenClaw suele instalarse en /usr/local/bin o vía npm global.
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.npm-global/bin
+
+# --- Arranque ---------------------------------------------------------------
+# 0.0.0.0 es NECESARIO: el backend vive en Docker y entra por host.docker.internal.
+# Con 127.0.0.1 el contenedor NO llegaría. Protege el puerto con ufw (ver DESPLIEGUE.md).
+ExecStart=/usr/bin/env uvicorn adaptador_openclaw_vps:app --host 0.0.0.0 --port 8080
+
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

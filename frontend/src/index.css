@@ -61,6 +61,20 @@
   ::selection {
     background: hsl(var(--accent) / 0.28);
   }
+  /* Móvil: iOS hace zoom automático al enfocar un campo de menos de 16px.
+     Subimos a 16px en pantallas estrechas para que no salte el zoom. */
+  @media (max-width: 767px) {
+    input,
+    select,
+    textarea {
+      font-size: 16px;
+    }
+  }
+  /* Nada debe provocar scroll horizontal en móvil. */
+  html,
+  body {
+    overflow-x: hidden;
+  }
   /* Scrollbars discretas, coherentes con el tema. */
   * {
     scrollbar-color: hsl(var(--line)) transparent;
@@ -98,9 +112,12 @@
     @apply border-b-0;
   }
 
-  /* Controles de formulario: heredan el tema sin repetir clases por página. */
+  /* Controles de formulario: heredan el tema sin repetir clases por página.
+     En móvil el alto mínimo es 44px (área táctil cómoda); en escritorio vuelve
+     a la densidad compacta del terminal. */
   .campo {
-    @apply bg-elevated border border-line rounded-md px-2.5 py-1.5 text-sm text-fg
+    @apply bg-elevated border border-line rounded-md px-3 py-2 text-fg
+      min-h-[44px] md:min-h-0 md:px-2.5 md:py-1.5 md:text-sm
       placeholder:text-faint outline-none transition
       focus:border-accent focus:ring-2 focus:ring-accent/25;
   }
@@ -109,5 +126,41 @@
   }
   .etiqueta {
     @apply block text-[11px] font-medium uppercase tracking-wider text-faint mb-1;
+  }
+
+  /* Sliders manejables con el dedo: pista visible y pulgar grande en móvil. */
+  input[type="range"] {
+    @apply w-full cursor-pointer appearance-none bg-transparent h-11 md:h-6;
+  }
+  input[type="range"]::-webkit-slider-runnable-track {
+    @apply h-1.5 rounded-full;
+    background: hsl(var(--line));
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    @apply h-6 w-6 md:h-4 md:w-4 rounded-full border-0;
+    background: hsl(var(--accent));
+    margin-top: -9px;
+  }
+  input[type="range"]:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 3px hsl(var(--accent) / 0.3);
+  }
+  input[type="range"]::-moz-range-track {
+    @apply h-1.5 rounded-full;
+    background: hsl(var(--line));
+  }
+  input[type="range"]::-moz-range-thumb {
+    @apply h-6 w-6 md:h-4 md:w-4 rounded-full border-0;
+    background: hsl(var(--accent));
+  }
+}
+
+@layer utilities {
+  /* Tablas que siguen siendo tablas (configuración): permiten desplazamiento
+     lateral SOLO dentro de su contenedor, nunca arrastrando la página entera. */
+  .tabla-scroll {
+    @apply overflow-x-auto -mx-4 px-4 md:mx-0 md:px-0;
+    -webkit-overflow-scrolling: touch;
   }
 }

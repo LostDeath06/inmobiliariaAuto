@@ -93,7 +93,7 @@ export default function Portales() {
       </div>
 
       <Card titulo="Búsquedas">
-        <div className="overflow-x-auto">
+        <div className="tabla-scroll">
           <table>
             <thead>
               <tr>

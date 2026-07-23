@@ -40,12 +40,13 @@ export default function Perfiles() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-1.5">
+      {/* Pestañas de perfil: deslizables en móvil, sin romper el ancho */}
+      <div className="flex gap-1.5 overflow-x-auto -mx-4 px-4 md:mx-0 md:px-0 pb-1">
         {perfiles.map((p) => (
           <button
             key={p.id}
             onClick={() => elegir(p)}
-            className={`px-3 py-1.5 rounded-md text-[13px] font-medium transition ${
+            className={`shrink-0 px-3 min-h-[44px] md:min-h-0 md:py-1.5 rounded-md text-sm md:text-[13px] font-medium transition ${
               sel.id === p.id ? "bg-elevated text-fg border border-line" : "text-muted hover:text-fg hover:bg-elevated/60"
             }`}
           >
@@ -56,16 +57,22 @@ export default function Perfiles() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
         <Card titulo="Pesos del score" subtitulo="deben sumar 100%">
-          <div className="space-y-3">
+          {/* Móvil: etiqueta y valor arriba, slider a ancho completo debajo (dedo).
+              Escritorio: la fila compacta de siempre. */}
+          <div className="space-y-4 md:space-y-3">
             {Object.keys(pesos).map((k) => (
-              <div key={k} className="flex items-center gap-3">
-                <label className="w-44 text-[13px] text-muted truncate">{k}</label>
+              <div key={k} className="md:flex md:items-center md:gap-3">
+                <div className="flex items-center justify-between md:block md:w-44">
+                  <label className="text-sm md:text-[13px] text-muted md:truncate md:block">{k}</label>
+                  <span className="cifra text-sm text-fg md:hidden">{(pesos[k] * 100).toFixed(0)}%</span>
+                </div>
                 <input
                   type="range" min={0} max={1} step={0.05} value={pesos[k]}
                   onChange={(e) => setPesos({ ...pesos, [k]: Number(e.target.value) })}
-                  className="flex-1 accent-accent"
+                  className="w-full md:flex-1"
+                  aria-label={k}
                 />
-                <span className="w-12 text-right cifra text-sm text-fg">{(pesos[k] * 100).toFixed(0)}%</span>
+                <span className="hidden md:block w-12 text-right cifra text-sm text-fg">{(pesos[k] * 100).toFixed(0)}%</span>
               </div>
             ))}
             <div className={`text-[13px] font-medium pt-1 ${sumaOk ? "text-positive" : "text-danger"}`}>
@@ -77,12 +84,13 @@ export default function Perfiles() {
         <Card titulo="Supuestos financieros del inversor">
           <div className="space-y-2.5">
             {Object.keys(supuestos).map((k) => (
-              <div key={k} className="flex items-center gap-3">
-                <label className="w-44 text-[13px] text-muted truncate">{k}</label>
+              <div key={k} className="flex items-center justify-between gap-3">
+                <label className="text-sm md:text-[13px] text-muted md:w-44 md:truncate">{k}</label>
                 <input
                   type="number" step="any" value={supuestos[k]}
                   onChange={(e) => setSupuestos({ ...supuestos, [k]: Number(e.target.value) })}
-                  className="campo w-32 cifra"
+                  className="campo w-28 md:w-32 cifra text-right"
+                  aria-label={k}
                 />
               </div>
             ))}
@@ -92,9 +100,9 @@ export default function Perfiles() {
 
       {aviso && <div className="text-[13px] text-warning bg-warning/10 border border-warning/30 rounded-md px-3 py-2">{aviso}</div>}
 
-      <div className="flex gap-2">
-        <Boton onClick={guardar}>Guardar</Boton>
-        <Boton variante="secundario" onClick={recalcular}>Recalcular scores del perfil</Boton>
+      <div className="flex flex-col sm:flex-row gap-2">
+        <Boton className="w-full sm:w-auto" onClick={guardar}>Guardar</Boton>
+        <Boton className="w-full sm:w-auto" variante="secundario" onClick={recalcular}>Recalcular scores del perfil</Boton>
       </div>
     </div>
   );

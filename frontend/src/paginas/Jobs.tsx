@@ -62,12 +62,12 @@ export default function Jobs() {
         >
           <div className="space-y-2">
             {noReconocidas.map((n) => (
-              <div key={n.inmueble_id} className="flex items-center justify-between gap-4 py-1.5 border-b border-line/70 last:border-0">
+              <div key={n.inmueble_id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5 sm:gap-4 py-2 border-b border-line/70 last:border-0">
                 <Link to={`/inmueble/${n.inmueble_id}`} className="text-fg hover:text-accent transition truncate">
                   {n.titulo || "(sin título)"}
                   <span className="text-faint text-xs ml-2">{[n.ciudad, n.pais].filter(Boolean).join(" · ")}</span>
                 </Link>
-                <div className="flex flex-wrap gap-1.5 justify-end shrink-0">
+                <div className="flex flex-wrap gap-1.5 sm:justify-end shrink-0">
                   {(n.senales_no_reconocidas || []).map((c: string) => <Chip key={c} tono="warning">{c}</Chip>)}
                 </div>
               </div>
@@ -78,7 +78,7 @@ export default function Jobs() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
         <Card titulo="Jobs" subtitulo="auto-refresco cada 5 s">
-          <div className="overflow-x-auto">
+          <div className="tabla-scroll">
             <table>
               <thead>
                 <tr>
@@ -111,7 +111,7 @@ export default function Jobs() {
               titulo="Modo manual · prompt para OpenClaw"
               acciones={<Boton variante="secundario" onClick={() => navigator.clipboard.writeText(prompt)}>Copiar</Boton>}
             >
-              <textarea readOnly value={prompt} className="campo w-full h-40 font-mono text-xs resize-none" />
+              <textarea readOnly value={prompt} className="campo w-full h-40 font-mono text-base md:text-xs resize-none" />
             </Card>
 
             <Card titulo="Pegar JSON de vuelta">
@@ -119,9 +119,9 @@ export default function Jobs() {
                 value={pegado}
                 onChange={(e) => setPegado(e.target.value)}
                 placeholder="Pega aquí el JSON que devuelve OpenClaw"
-                className="campo w-full h-40 font-mono text-xs resize-none"
+                className="campo w-full h-40 font-mono text-base md:text-xs resize-none"
               />
-              <div className="mt-3 flex items-center gap-3">
+              <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-3">
                 <Boton onClick={enviarManual}>Ingestar resultado</Boton>
                 {msg && <span className="text-sm text-muted">{msg}</span>}
               </div>

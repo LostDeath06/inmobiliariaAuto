@@ -5,7 +5,7 @@ import {
 } from "recharts";
 import { api } from "../api";
 import { coloresGrafico, useTema } from "../tema";
-import { AvisoProvisional, BadgeCalidad, BadgeScore, Boton, Card, Chip, IconoAviso, Vacio, fmtDinero, fmtMetrica } from "../ui";
+import { AvisoProvisional, BadgeCalidad, BadgeScore, Boton, Card, Chip, IconoAviso, Vacio, fmtDinero, fmtMetrica, useEsMovil } from "../ui";
 
 export default function Ficha() {
   const { id } = useParams();
@@ -30,18 +30,25 @@ export default function Ficha() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4">
         <div className="min-w-0">
-          <h1 className="text-lg font-semibold text-fg tracking-tight truncate">{inmueble.titulo || "(sin título)"}</h1>
-          <p className="text-sm text-faint">
+          <h1 className="text-base sm:text-lg font-semibold text-fg tracking-tight leading-snug">
+            {inmueble.titulo || "(sin título)"}
+          </h1>
+          <p className="text-sm text-faint mt-0.5">
             {[...new Set([inmueble.barrio, inmueble.ciudad, inmueble.pais].filter(Boolean))].join(" · ") || "—"}
           </p>
         </div>
+        {/* En móvil los dos botones ocupan la fila a partes iguales (área táctil amplia) */}
         <div className="flex gap-2 shrink-0">
-          <a href={inmueble.url_anuncio} target="_blank" rel="noreferrer">
-            <Boton variante="secundario">Ver anuncio</Boton>
+          <a href={inmueble.url_anuncio} target="_blank" rel="noreferrer" className="flex-1 sm:flex-none">
+            <Boton variante="secundario" className="w-full sm:w-auto">Ver anuncio</Boton>
           </a>
-          <Boton onClick={() => api.post(`/api/inmuebles/${id}/recalcular`).then(cargar)}>Recalcular</Boton>
+          <div className="flex-1 sm:flex-none">
+            <Boton className="w-full sm:w-auto" onClick={() => api.post(`/api/inmuebles/${id}/recalcular`).then(cargar)}>
+              Recalcular
+            </Boton>
+          </div>
         </div>
       </div>
 
@@ -156,9 +163,9 @@ export default function Ficha() {
         </Card>
       </div>
 
-      <Card titulo="Métricas financieras" subtitulo="motor determinista · pasa el ratón por cada cifra para ver su fórmula e inputs">
+      <Card titulo="Métricas financieras" subtitulo="motor determinista · mantén pulsada una cifra para ver su fórmula e inputs">
         {metricas ? (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 md:gap-2.5">
             {Object.entries(metricas.metricas || {}).map(([k, v]) => (
               <div
                 key={k}
@@ -205,6 +212,7 @@ function Senales({ titulo, codigos, tono }: { titulo: string; codigos?: string[]
 
 function DesgloseChart({ desglose }: { desglose: any }) {
   const { tema } = useTema();
+  const esMovil = useEsMovil();
   const c = coloresGrafico(tema);
   const datos = useMemo(
     () =>
@@ -213,18 +221,30 @@ function DesgloseChart({ desglose }: { desglose: any }) {
         .map(([nombre, x]: any) => ({ nombre, contribucion: Number(x.contribucion || 0) })),
     [desglose],
   );
+  // En móvil los nombres de componente (rentabilidad_neta…) no caben en 132px:
+  // se recorta el eje y se acorta la etiqueta, o el gráfico se come el ancho.
+  const anchoEje = esMovil ? 92 : 132;
+  const tamTexto = esMovil ? 10 : 11;
   return (
-    <ResponsiveContainer width="100%" height={Math.max(180, datos.length * 34)}>
-      <BarChart data={datos} layout="vertical" margin={{ left: 8, right: 16, top: 4, bottom: 4 }}>
+    <ResponsiveContainer width="100%" height={Math.max(180, datos.length * (esMovil ? 30 : 34))}>
+      <BarChart data={datos} layout="vertical" margin={{ left: 0, right: esMovil ? 8 : 16, top: 4, bottom: 4 }}>
         <CartesianGrid horizontal={false} stroke={c.grid} />
-        <XAxis type="number" stroke={c.eje} tick={{ fontSize: 11, fill: c.eje }} tickLine={false} axisLine={{ stroke: c.grid }} />
-        <YAxis type="category" dataKey="nombre" width={132} tick={{ fontSize: 11, fill: c.eje }} tickLine={false} axisLine={false} />
+        <XAxis type="number" stroke={c.eje} tick={{ fontSize: tamTexto, fill: c.eje }} tickLine={false} axisLine={{ stroke: c.grid }} />
+        <YAxis
+          type="category"
+          dataKey="nombre"
+          width={anchoEje}
+          tick={{ fontSize: tamTexto, fill: c.eje }}
+          tickLine={false}
+          axisLine={false}
+          tickFormatter={(v: string) => (esMovil && v.length > 13 ? `${v.slice(0, 12)}…` : v)}
+        />
         <Tooltip
           cursor={{ fill: c.grid, opacity: 0.4 }}
           contentStyle={{ background: c.superficie, border: `1px solid ${c.grid}`, borderRadius: 8, fontSize: 12, color: c.etiqueta }}
           labelStyle={{ color: c.etiqueta }}
         />
-        <Bar dataKey="contribucion" fill={c.barra} radius={[0, 3, 3, 0]} barSize={16} />
+        <Bar dataKey="contribucion" fill={c.barra} radius={[0, 3, 3, 0]} barSize={esMovil ? 13 : 16} />
       </BarChart>
     </ResponsiveContainer>
   );
@@ -232,6 +252,7 @@ function DesgloseChart({ desglose }: { desglose: any }) {
 
 function HistoricoChart({ puntos, moneda }: { puntos: any[]; moneda?: string }) {
   const { tema } = useTema();
+  const esMovil = useEsMovil();
   const c = coloresGrafico(tema);
   // El repositorio ya devuelve el histórico en orden cronológico ascendente:
   // no reordenar, o el eje de tiempo leería al revés y una bajada parecería subida.
@@ -240,15 +261,21 @@ function HistoricoChart({ puntos, moneda }: { puntos: any[]; moneda?: string }) 
     precio: Number(p.precio),
   }));
   return (
-    <ResponsiveContainer width="100%" height={220}>
-      <LineChart data={datos} margin={{ left: 8, right: 16, top: 8, bottom: 4 }}>
+    <ResponsiveContainer width="100%" height={esMovil ? 190 : 220}>
+      <LineChart data={datos} margin={{ left: 0, right: esMovil ? 8 : 16, top: 8, bottom: 4 }}>
         <CartesianGrid stroke={c.grid} vertical={false} />
-        <XAxis dataKey="fecha" stroke={c.eje} tick={{ fontSize: 11, fill: c.eje }} tickLine={false} axisLine={{ stroke: c.grid }} />
+        <XAxis dataKey="fecha" stroke={c.eje} tick={{ fontSize: esMovil ? 10 : 11, fill: c.eje }} tickLine={false} axisLine={{ stroke: c.grid }} minTickGap={esMovil ? 24 : 5} />
         {/* Serie de precios: escala ajustada al dato (con holgura), no anclada a 0,
-            o una bajada del 10% se vería plana. Los rótulos del eje van siempre. */}
-        <YAxis stroke={c.eje} tick={{ fontSize: 11, fill: c.eje }} tickLine={false} axisLine={false} width={64}
+            o una bajada del 10% se vería plana. Los rótulos del eje van siempre.
+            En móvil se abrevian a miles (145k) para que quepan en el eje. */}
+        <YAxis stroke={c.eje} tick={{ fontSize: esMovil ? 10 : 11, fill: c.eje }} tickLine={false} axisLine={false}
+          width={esMovil ? 44 : 64}
           domain={[(min: number) => min * 0.96, (max: number) => max * 1.04]}
-          tickFormatter={(v) => Number(v).toLocaleString("es-ES", { maximumFractionDigits: 0 })} />
+          tickFormatter={(v) =>
+            esMovil
+              ? `${Math.round(Number(v) / 1000)}k`
+              : Number(v).toLocaleString("es-ES", { maximumFractionDigits: 0 })
+          } />
         <Tooltip
           contentStyle={{ background: c.superficie, border: `1px solid ${c.grid}`, borderRadius: 8, fontSize: 12, color: c.etiqueta }}
           labelStyle={{ color: c.etiqueta }}
