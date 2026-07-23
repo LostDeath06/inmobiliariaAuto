@@ -1,8 +1,9 @@
 """Script de humo del analista cualitativo (Fase 6).
 
 Prueba la llamada REAL a Claude sobre UN solo anuncio de ejemplo, para reducir el
-riesgo antes de enchufar la API key a un lote entero. Si el manejo de enums/`$defs`
-en structured outputs falla, lo ves aquí en 10 segundos.
+riesgo antes de enchufar la API key a un lote entero. Fuerza la salida estructurada
+por TOOL USE (no `output_config`, que no existe en la 0.42.0 desplegada). Si el SDK
+no lo soporta o el esquema no valida, lo ves aquí en 10 segundos.
 
 Uso:
     # Windows PowerShell
@@ -11,11 +12,11 @@ Uso:
     ANTHROPIC_API_KEY="sk-ant-..." python scripts/probar_analista.py
 
 Qué hace:
-1. Imprime el ESQUEMA exacto que se le fuerza a Claude (el mismo que usa el pipeline).
-2. Llama a la API con el system prompt y el esquema reales.
-3. Imprime la RESPUESTA CRUDA de Claude.
-4. Intenta parsearla con Pydantic (AnalisisCualitativo).
-5. Falla RUIDOSAMENTE y con mensaje claro si algo no valida (salida != 0).
+1. Verifica que el SDK instalado soporte tool use (lo mismo que el arranque del backend).
+2. Imprime la TOOL exacta que se le fuerza a Claude (la misma que usa el pipeline).
+3. Llama a la API con el system prompt y la tool reales.
+4. Imprime el INPUT del tool_use (lo que devolvió Claude, ya parseado).
+5. Lo valida con Pydantic (AnalisisCualitativo) y falla RUIDOSAMENTE si algo no cuadra.
 
 Los datos del anuncio son FICTICIOS y están marcados como tales — nunca se mezclan
 con configuración real.
@@ -36,9 +37,12 @@ from backend.modelos.pipeline import Inmueble  # noqa: E402
 from backend.nucleo.config import obtener_config  # noqa: E402
 from backend.servicios.analista_cualitativo import (  # noqa: E402
     SYSTEM_PROMPT,
+    _NOMBRE_TOOL,
     _esquema,
     _prompt_usuario,
+    _tool,
     validar_senales,
+    verificar_sdk,
 )
 
 # La consola de Windows es cp1252: un carácter no-ASCII en un print reventaría el
@@ -99,14 +103,24 @@ def main() -> None:
     except ImportError:
         _error("Falta el paquete `anthropic`. Instala: pip install -r requirements.txt")
 
-    esquema = _esquema()
+    # Lo mismo que verifica el arranque del backend: que el SDK acepte tool use.
+    # Aquí se ve antes de gastar un token, con el número de versión a la vista.
+    print(f"SDK anthropic {getattr(anthropic, '__version__', '¿?')} — verificando… ", end="")
+    try:
+        verificar_sdk()
+    except RuntimeError as e:
+        print("FALLO")
+        _error(str(e))
+    print("OK (soporta tool use)")
+
+    tool = _tool()
     usuario = _prompt_usuario(INMUEBLE_DEMO, CODIGOS_RIESGO, CODIGOS_OPORTUNIDAD)
 
     print("=" * 70)
     print(f"MODELO: {cfg.anthropic_model}")
     print("=" * 70)
-    print("\n--- ESQUEMA forzado a Claude (structured outputs) ---")
-    print(json.dumps(esquema, indent=2, ensure_ascii=False))
+    print(f"\n--- TOOL forzada a Claude (tool use · '{_NOMBRE_TOOL}') ---")
+    print(json.dumps(tool, indent=2, ensure_ascii=False))
 
     print("\n--- Llamando a la API… ---")
     cliente = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
@@ -116,27 +130,39 @@ def main() -> None:
             max_tokens=cfg.anthropic_max_tokens,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": usuario}],
-            output_config={"format": {"type": "json_schema", "schema": esquema}},
+            tools=[tool],
+            tool_choice={"type": "tool", "name": _NOMBRE_TOOL},
         )
     except Exception as e:  # noqa: BLE001
         _error(
             f"La API rechazó la petición ({type(e).__name__}): {e}\n"
-            "Causa típica: el esquema de structured outputs no le gusta a la API "
-            "(enums/$defs/additionalProperties). Este es exactamente el fallo que "
+            "Si es un TypeError sobre un argumento, el SDK no soporta lo que el "
+            "código envía (fue el fallo original con `output_config`). Si es de "
+            "autenticación, revisa ANTHROPIC_API_KEY. Este es justo el fallo que "
             "queríamos cazar aquí y no en mitad de un lote."
         )
 
-    texto = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
+    print(f"\n(stop_reason={resp.stop_reason}, tokens entrada={resp.usage.input_tokens}, "
+          f"salida={resp.usage.output_tokens})")
 
-    print("\n--- RESPUESTA CRUDA de Claude ---")
-    print(texto)
-    print(f"\n(tokens entrada={resp.usage.input_tokens}, salida={resp.usage.output_tokens})")
-    if resp.stop_reason == "refusal":
-        _error("Claude rechazó la petición (stop_reason=refusal). Revisa el contenido.")
+    bloque = next(
+        (b for b in resp.content
+         if getattr(b, "type", None) == "tool_use" and getattr(b, "name", None) == _NOMBRE_TOOL),
+        None,
+    )
+    if bloque is None:
+        _error(
+            f"La respuesta no trae el bloque tool_use '{_NOMBRE_TOOL}' "
+            f"(stop_reason={resp.stop_reason}). Con tool_choice forzado no debería "
+            "pasar; un stop_reason=refusal indica que el modelo rechazó el contenido."
+        )
+
+    print("\n--- INPUT del tool_use (lo que devolvió Claude, ya parseado) ---")
+    print(json.dumps(bloque.input, indent=2, ensure_ascii=False))
 
     print("\n--- Parseo Pydantic (AnalisisCualitativo) ---")
     try:
-        analisis = AnalisisCualitativo.model_validate_json(texto)
+        analisis = AnalisisCualitativo.model_validate(bloque.input)
     except Exception as e:  # noqa: BLE001
         _error(
             f"El JSON de Claude NO valida contra AnalisisCualitativo:\n{e}\n"

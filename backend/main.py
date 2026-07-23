@@ -15,10 +15,15 @@ from .api import portales as api_portales
 from .integraciones.openclaw_client import OpenClawClient
 from .nucleo import basedatos
 from .nucleo.config import obtener_config
+from .servicios.analista_cualitativo import verificar_sdk
 
 
 @asynccontextmanager
 async def ciclo_vida(app: FastAPI):
+    # Falla ruidosamente al arrancar si el SDK de Anthropic no soporta lo que el
+    # analista usa (tool use). Preferimos un contenedor que no arranca a que los
+    # análisis fallen uno a uno en silencio, como pasó con `output_config`.
+    verificar_sdk()
     await basedatos.obtener_pool()
     yield
     await basedatos.cerrar_pool()

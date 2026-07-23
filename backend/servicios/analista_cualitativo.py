@@ -92,6 +92,72 @@ def _esquema() -> dict:
     return esquema
 
 
+# --- Salida estructurada por TOOL USE, no por `output_config` -----------------
+# El primer análisis real reventó con `output_config` (feature de structured outputs
+# que existe en anthropic 0.116.0 pero NO en la 0.42.0 que instala el contenedor).
+# `tool use` —forzar una tool cuyo `input_schema` es el esquema del análisis— está
+# presente en AMBAS versiones (verificado por introspección) y es el mecanismo
+# estable. El modelo devuelve un bloque `tool_use` cuyo `input` es el JSON; la
+# conformidad la garantiza Pydantic (extra='forbid') + reintentos, no la API.
+_NOMBRE_TOOL = "registrar_analisis_cualitativo"
+
+
+def _tool() -> dict:
+    """La tool que fuerza la salida estructurada. Su `input_schema` ES `_esquema()`,
+    así que la barrera anti-números (test) sigue cubriendo lo que se le pide a Claude."""
+    return {
+        "name": _NOMBRE_TOOL,
+        "description": (
+            "Registra el juicio cualitativo del inmueble. SOLO categorías, enums, "
+            "booleanos y texto corto; NUNCA cifras calculadas (ROI, rentabilidades, "
+            "porcentajes): de eso se encarga otro sistema."
+        ),
+        "input_schema": _esquema(),
+    }
+
+
+def verificar_sdk() -> None:
+    """Comprueba, AL ARRANCAR, que el SDK de Anthropic acepta lo que este código usa.
+
+    Requisito explícito: preferir un contenedor que no arranca a nueve análisis
+    fallidos en silencio. El primer análisis real falló porque la firma de
+    `messages.create` cambió entre versiones (`output_config` en 0.116.0, ausente
+    en la 0.42.0 desplegada). Esto lo caza en el arranque, no en mitad de un lote.
+
+    Solo inspecciona la firma (sin red ni clave real): valida capacidad del SDK,
+    no autenticación —eso lo cubre `scripts/probar_analista.py` con una llamada real.
+    """
+    import inspect
+
+    try:
+        import anthropic
+    except ImportError as e:  # pragma: no cover
+        raise RuntimeError(
+            "El paquete `anthropic` no está instalado. Ejecuta "
+            "`pip install -r requirements.txt`."
+        ) from e
+
+    try:
+        cliente = anthropic.AsyncAnthropic(api_key="verificacion-de-arranque")
+        parametros = set(inspect.signature(cliente.messages.create).parameters)
+    except Exception as e:  # noqa: BLE001  # pragma: no cover
+        raise RuntimeError(
+            f"No se pudo inspeccionar el SDK de Anthropic para verificarlo: {e}"
+        ) from e
+
+    requeridos = {"tools", "tool_choice", "system", "messages", "model", "max_tokens"}
+    faltan = requeridos - parametros
+    if faltan:
+        version = getattr(anthropic, "__version__", "desconocida")
+        raise RuntimeError(
+            f"El SDK de Anthropic instalado (anthropic {version}) no acepta "
+            f"{sorted(faltan)}. El analista usa 'tool use' (tools + tool_choice), "
+            "presente desde 0.42.0. Alinea `requirements.txt` con una versión que lo "
+            "soporte y reconstruye la imagen. Se aborta el arranque a propósito: es "
+            "preferible a que fallen los análisis uno a uno más tarde."
+        )
+
+
 # Sentinela de "sin señal": ni surte efecto ni se marca como no reconocida.
 _SENALES_BENIGNAS = {"NINGUNA"}
 
@@ -171,12 +237,31 @@ async def analizar(
                 max_tokens=cfg.anthropic_max_tokens,
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": usuario}],
-                output_config={"format": {"type": "json_schema", "schema": _esquema()}},
+                tools=[_tool()],
+                # Forzar la tool: el modelo DEBE devolver un bloque tool_use con el
+                # análisis, no prosa. La conformidad con el esquema la garantiza
+                # Pydantic abajo, no la API (así vale igual en 0.42.0 sin `strict`).
+                tool_choice={"type": "tool", "name": _NOMBRE_TOOL},
             )
             tokens_in += resp.usage.input_tokens
             tokens_out += resp.usage.output_tokens
-            texto = next((b.text for b in resp.content if b.type == "text"), "")
-            analisis = AnalisisCualitativo.model_validate_json(texto)
+            bloque = next(
+                (b for b in resp.content
+                 if getattr(b, "type", None) == "tool_use"
+                 and getattr(b, "name", None) == _NOMBRE_TOOL),
+                None,
+            )
+            if bloque is None:
+                # Con tool_choice forzado no debería ocurrir; si ocurre (p. ej.
+                # refusal de seguridad), se dice en claro en vez de tragarlo.
+                raise ValueError(
+                    f"La respuesta no trae el bloque tool_use '{_NOMBRE_TOOL}' "
+                    f"(stop_reason={getattr(resp, 'stop_reason', '?')})"
+                )
+            # `bloque.input` YA es un dict (tool use lo entrega parseado, no como
+            # texto). Se valida con Pydantic: extra='forbid' rechaza cualquier campo
+            # no declarado y el esquema no tiene campos numéricos (Principio 1).
+            analisis = AnalisisCualitativo.model_validate(bloque.input)
             # Endurecimiento: cruza las señales contra el catálogo del país; los
             # códigos fuera de catálogo van a `senales_no_reconocidas` (no se pierden).
             analisis = validar_senales(analisis, codigos_riesgo, codigos_oportunidad)
