@@ -123,6 +123,21 @@ class OpenClawClient:
         # Valida contra el contrato §5.4 (o lanza).
         return SobreScraping.model_validate(resp.json())
 
+    async def obtener_uso(self, openclaw_job_id: str) -> dict | None:
+        """Consumo de tokens del job que reporta el agente (meta.agentMeta.usage).
+
+        Nunca hace fallar el job: el gasto es telemetría. Si el agente no lo
+        reporta o el endpoint no existe, devuelve None y el dashboard lo marca
+        como hueco en vez de inventar un cero.
+        """
+        if self.modo == "manual":
+            return None
+        try:
+            resp = await self._peticion("GET", f"/jobs/{openclaw_job_id}/uso")
+            return (resp.json() or {}).get("uso")
+        except Exception:  # noqa: BLE001
+            return None
+
     async def cancelar_job(self, openclaw_job_id: str) -> bool:
         if self.modo == "manual":
             return True

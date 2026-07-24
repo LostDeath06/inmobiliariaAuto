@@ -14,7 +14,7 @@ Producto **greenfield**, construido de la Fase 0 a la 9 y **desplegado 24/7**.
 
 - **Producción:** https://inmobiliariaauto.com (VPS Hostinger + Cloudflare Tunnel, tras contraseña)
 - **Local:** UI `localhost:5173` · API `localhost:8000/docs` · Postgres `5455`
-- **Tests:** `58 passed`
+- **Tests:** `69 passed`
 - **Inventario:** 32 inmuebles reales (ES 16 · DO 16 · VE 0), los 32 analizados por Claude
 - **Frente abierto único:** OpenClaw — código completo y desplegable, sin ejecutar aún
   contra el agente real
@@ -372,6 +372,47 @@ no significa nada), y antes eso los hacía desaparecer de toda pantalla. El rank
 avisa —«27 puntuados · 5 sin puntuar»— con enlace a Inventario y a Estado por país, y la
 ficha de un `NO_CALCULABLE` nombra qué dato concreto falta y enlaza a cargarlo.
 
+### 7.5 Coste de tokens: libro, dashboard y tope
+
+Se agotaron **$5 de saldo en pocas horas** sin que la app pudiera decir en qué. Tres
+agujeros a la vez (§8.8). Lo que hay ahora:
+
+**Libro de gasto por evento** (`uso_tokens`): una fila por llamada facturable, con
+fuente (`ANALISTA` | `OPENCLAW`), modelo, job, inmueble, **las cuatro clases de token**
+—entrada, salida, escritura de caché, lectura de caché— y el coste **congelado al precio
+del momento**. Cambiar un precio mañana no reescribe el histórico: es contabilidad, no
+una proyección.
+
+**Precios en BD** (`precios_modelo`), editables desde la pantalla. Cuatro columnas porque
+hay cuatro precios: la escritura de caché cuesta **1,25×** la entrada y la lectura
+**0,1×**. Ignorar esa distinción es lo que hacía invisible el gasto de un agente.
+
+> **Fecha que hay que recordar:** Sonnet 5 está a **$2/$10 en precio introductorio hasta
+> el 31-ago-2026**; el 1-sep pasa a $3/$15. Si no se actualiza ese día en la pantalla de
+> Costes, el gasto saldrá **subestimado un 50%**.
+
+**Pantalla Costes**: total, por fuente, por día, por job, por inmueble analizado, y los
+movimientos en crudo. Con una nota visible de **desde cuándo existe el libro** — lo
+gastado antes no quedó anotado y no se puede reconstruir, así que «gasto total» significa
+«desde que existe el libro», no «desde siempre».
+
+**Dos límites distintos, que hacen cosas distintas:**
+
+| | Qué hace |
+|---|---|
+| `umbral_gasto_*` | **Avisa** en el dashboard. No cambia el comportamiento. |
+| `tope_gasto_diario_usd` | **Corta**: por encima no se arranca trabajo nuevo. Arranca en **$2,00**. |
+
+El tope es *refuse-to-dispatch*, nunca *kill*: se comprueba **antes de crear el job** (ni
+se crea) y, en los lotes del analista, **entre inmuebles**. Cada inmueble se completa
+entero o no empieza; cortar a mitad dejaría uno con análisis pero sin métricas, que es
+peor que no haberlo tocado. Un job ya lanzado termina.
+
+**Caché del analista**: breakpoint en `system`, que cachea `tools + system` (el orden de
+caché es tools → system → messages). Son ~1.900 tokens constantes, por encima del mínimo
+de 1.024 de Sonnet 5. El anuncio va en `messages`, fuera del prefijo, así que no lo
+invalida.
+
 ---
 
 ## 8. Decisiones que cambiaron el producto (leer antes de repetir errores)
@@ -446,6 +487,63 @@ excepción se guarda en `analisis_cualitativos.motivo_fallo` y se propaga a
 significa «análisis que falló», no «pendiente»: de ahí el botón **Reprocesar sin análisis**,
 que reintenta en lote sin volver a pedir nada a OpenClaw.
 
+### 8.8 La caché que solo se escribía, y el coste que mentía
+
+Se fueron **$5 en pocas horas** y la app no podía decir en qué. Al medirlo con los
+precios reales aparecieron **tres fallos superpuestos**, todos del mismo tipo: cifras
+que parecían informar y no informaban.
+
+**1. Los precios estaban hardcodeados y desactualizados.** `pipeline.py` tenía
+`$3/$15` fijos. Sonnet 5 está a `$2/$10` (introductorio), así que el único coste que la
+app mostraba —el del analista— venía **inflado un 50%**. Un número visible y falso es
+peor que ninguno: da sensación de control.
+
+**2. No se contaban los tokens de caché.** Solo entrada y salida. En un agente
+conversacional la partida grande es la **escritura de caché** (1,25× la entrada), así
+que la contabilidad ignoraba justo lo que más costaba.
+
+**3. OpenClaw no reportaba nada.** El adaptador no capturaba su consumo, así que el
+gasto del agente —**≥90% del total**— era literalmente invisible.
+
+Los números, ya medidos:
+
+| | Coste |
+|---|---|
+| Analizar un inmueble (analista) | **$0,0157** |
+| Reprocesar 9 inmuebles | **$0,141** |
+| **Una pregunta trivial a OpenClaw** | **$0,050** |
+
+**Una sonda trivial cuesta 3,2× más que analizar un inmueble entero.** El analista, la
+única parte que se veía, resultó ser la barata: 1.000 inmuebles serían ~$15,7.
+
+#### El bug de diseño: escribir la caché siempre, leerla nunca
+
+La sonda trivial consumió **19.254 tokens de escritura de caché**: el system prompt, 16
+skills y 7 ficheros de workspace, inyectados antes de la primera palabra útil. Con el
+contrato §5.4 que añade el adaptador (2.930 tokens), el preámbulo real ronda los
+**22.200 tokens**.
+
+Y aquí está lo caro: el adaptador usa **una `--session-key` distinta por job** (§9.4).
+Eso significa que **cada job escribe la caché y ninguno la lee nunca**. Se paga el 1,25×
+y no se cobra jamás el 0,1×: el peor de los dos mundos, **$0,055 de suelo por job antes
+de hacer nada**.
+
+**Se mantiene a propósito.** Reutilizar sesión entre jobs sería 12,5× más barato en ese
+componente, pero un job de Valencia que heredase contexto de uno de Madrid podría colar
+datos cruzados en la extracción — exactamente el fallo silencioso que este sistema existe
+para evitar. **Se prefiere pagar más y que cada job salga limpio.**
+
+Lo que sí se puede hacer sin tocar esa garantía: **podar el preámbulo** (16 skills → las
+necesarias) y elegir bien el TTL de caché. Ambos en `docs/OPENCLAW_COSTES.md`.
+
+**Dentro de un job la caché ya se reutiliza**: el adaptador hace una sola invocación con
+una sola `--session-key`, así que todos los turnos comparten sesión. Ahí no hay nada que
+ganar. Lo que queda es el **TTL de 5 minutos**, que en un job de 15 minutos navegando
+puede caducar varias veces y reescribir todo el contexto acumulado.
+
+**La lección:** una cifra de coste que nadie ha contrastado con la factura real es una
+suposición con formato de dato.
+
 ---
 
 ## 9. OpenClaw — estado real
@@ -494,13 +592,15 @@ adaptador a escuchar en `0.0.0.0`, y por tanto **a cerrar el 8080 en `ufw`**.
 
 ---
 
-## 10. Tests (58) — y cuáles son barreras
+## 10. Tests (69) — y cuáles son barreras
 
 | Fichero | N.º | Qué cubre |
 |---|---|---|
 | `test_motor_financiero.py` | 15 | Casos calculados a mano, FX multi-divisa, NO_CALCULABLE |
 | `test_motor_scoring.py` | 7 | Redistribución de pesos, multiplicador de riesgo país |
 | `test_confotur.py` | **9** | CONFOTUR exime el gasto marcado (no otro); `null` ≠ `false`; cambia el ROI |
+| `test_analista_tool_use.py` | **5** | La salida estructurada va por tool use, no por `output_config` |
+| `test_costes.py` | **6** | Las cuatro clases de token se tarifan por separado; sin precio, 0 con aviso |
 | `test_validacion_ingesta.py` | 7 | Válido, cuarentena, no-invención |
 | `test_senales_no_reconocidas.py` | **8** | Códigos fuera de catálogo nunca se pierden |
 | `test_blindaje_senales_ignoradas.py` | **6** | Un score con señales ignoradas nunca es COMPLETO |
@@ -538,8 +638,14 @@ Ordenado por lo que morderá antes.
    financiación en DOP; en USD la tasa habitual es 7–8%. `config_mercado_pais` guarda un
    tipo por país, no por moneda, así que un inmueble en USD sale con la cuota
    sobreestimada y el ROI a la baja (error conservador).
-9. **Sin TLS extremo a extremo** (§7.3).
-10. **RLS permisivo:** la barrera real es la auth de nginx, no la base de datos.
+9. **El libro de gasto empieza el día que se desplegó** (§7.5). Lo consumido antes —los
+   $5 que motivaron todo esto— no quedó anotado en ninguna parte y **no se puede
+   reconstruir**. «Gasto total» significa «desde que existe el libro».
+10. **Preámbulo de OpenClaw sin podar:** ~22.200 tokens por job antes de empezar
+    (§8.8). Es el mayor ahorro pendiente (~73%); el procedimiento está en
+    `docs/OPENCLAW_COSTES.md`, falta aplicarlo en el VPS y medirlo.
+11. **Sin TLS extremo a extremo** (§7.3).
+12. **RLS permisivo:** la barrera real es la auth de nginx, no la base de datos.
 
 *Resuelto desde la última versión de este documento:* el tooltip de auditoría de métricas
 ya no usa `title` nativo (no funcionaba en táctil) — es un panel pulsable; y los inmuebles
@@ -549,16 +655,25 @@ ya no usa `title` nativo (no funcionaba en táctil) — es un panel pulsable; y 
 
 ## 12. Próximos pasos
 
-1. **Ejecutar la sonda de OpenClaw** en el VPS y activar `OPENCLAW_MODE=http`. Con eso el
+1. **Podar el preámbulo de OpenClaw** (`docs/OPENCLAW_COSTES.md`). Es lo primero porque
+   es dinero saliendo: ~73% de ahorro por job, sin tocar ninguna garantía. Agente
+   dedicado con `skills: []` y `OPENCLAW_AGENT_ID` en el systemd del adaptador.
+2. **Decidir el TTL de caché con el número delante.** `cacheRetention: "long"` (1 h, 2×)
+   gana sobre `"short"` (5 min, 1,25×) **solo si la caché caduca ≥2 veces por job** — el
+   equilibrio está en 1,6 escrituras. Lanza un job, mira `cacheWrite` en **Costes → Por
+   job** y decide con ese dato, no con la estimación.
+3. **Ejecutar la sonda de OpenClaw** en el VPS y activar `OPENCLAW_MODE=http`. Con eso el
    ciclo se cierra solo: el worker despacha por cron y los inmuebles entran sin tocar nada.
-2. **Validar los datos fiscales `PROVISIONAL`** cargados (§6.1) y afinar los benchmarks de
+4. **Validar los datos fiscales `PROVISIONAL`** cargados (§6.1) y afinar los benchmarks de
    ES y DO a nivel barrio (lo que más cambiaría el ranking).
-3. **Marcar CONFOTUR en los Cap Cana reales** (§5.1): hoy están todos en `NULL`
+5. **Marcar CONFOTUR en los Cap Cana reales** (§5.1): hoy están todos en `NULL`
    (desconocido), así que su score sale `PARCIAL` con el impuesto aplicado.
-4. **Cargar ADR y ocupación de Cap Cana** y activar el cálculo de corta estancia (§5).
-5. **Definir `riesgos_pais` de VE** y encontrar una fuente de anuncios que no bloquee.
-6. **ITP por tramos** (§11.7) y **tasa por moneda en DO** (§11.8) si el afinado fiscal lo
+6. **Cargar ADR y ocupación de Cap Cana** y activar el cálculo de corta estancia (§5).
+7. **Definir `riesgos_pais` de VE** y encontrar una fuente de anuncios que no bloquee.
+8. **ITP por tramos** (§11.7) y **tasa por moneda en DO** (§11.8) si el afinado fiscal lo
    pide: ambos exigen una tabla hija y que el motor elija fila por precio / por divisa.
+9. **Actualizar el precio de Sonnet 5 el 1-sep-2026** (§7.5): pasa de $2/$10 a $3/$15.
+   Sin eso, el gasto que muestre la pantalla saldrá subestimado un 50%.
 
 ---
 

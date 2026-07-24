@@ -10,6 +10,7 @@ const enlaces = [
   { a: "/mercado", t: "Configuración" },
   { a: "/portales", t: "Portales" },
   { a: "/jobs", t: "Monitor" },
+  { a: "/costes", t: "Costes" },
 ];
 
 export default function App() {

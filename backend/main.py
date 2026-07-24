@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api import config as api_config
+from .api import costes as api_costes
 from .api import inmuebles as api_inmuebles
 from .api import jobs as api_jobs
 from .api import perfiles as api_perfiles
@@ -40,6 +41,7 @@ app.add_middleware(
 
 app.include_router(api_perfiles.router)
 app.include_router(api_config.router)
+app.include_router(api_costes.router)
 app.include_router(api_portales.router)
 app.include_router(api_jobs.router)
 app.include_router(api_inmuebles.router)

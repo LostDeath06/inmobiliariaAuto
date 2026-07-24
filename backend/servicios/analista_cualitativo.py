@@ -50,6 +50,11 @@ class ResultadoAnalisis:
     tokens_salida: int
     modelo: str
     fallido: bool
+    # Tokens de CACHÉ. Sin esto el coste real era invisible: la escritura de
+    # caché cuesta 1.25x la entrada y la lectura 0.1x, así que contar solo
+    # entrada/salida puede errar el gasto por completo.
+    tokens_cache_write: int = 0
+    tokens_cache_read: int = 0
     # Última excepción cuando `fallido`. Antes se perdía: el bucle atrapaba
     # cualquier error y seguía, así que un job salía con coste 0.0000 y sin
     # pista de si era la clave de la API, el modelo o la red.
@@ -229,13 +234,27 @@ async def analizar(
     usuario = _prompt_usuario(inmueble, codigos_riesgo, codigos_oportunidad)
 
     tokens_in = tokens_out = 0
+    cache_w = cache_r = 0
     ultimo_error: str | None = None
     for _ in range(VERSION_MAX_REINTENTOS + 1):
         try:
             resp = await cliente.messages.create(
                 model=cfg.anthropic_model,
                 max_tokens=cfg.anthropic_max_tokens,
-                system=SYSTEM_PROMPT,
+                # Caché de prompt sobre el prefijo CONSTANTE. El orden de caché es
+                # tools → system → messages, así que un breakpoint en `system`
+                # cachea tools+system: el esquema de la tool (~1.500 tokens) más
+                # este prompt, idénticos en cada llamada. Solo varía el anuncio,
+                # que va en `messages` y queda fuera del prefijo.
+                #
+                # Supera el mínimo de Sonnet 5 (1.024 tokens); si algún día no lo
+                # superara, la API simplemente no cachea y `cache_*` vienen a 0 —
+                # el dashboard lo enseñaría, no fallaría en silencio.
+                system=[{
+                    "type": "text",
+                    "text": SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }],
                 messages=[{"role": "user", "content": usuario}],
                 tools=[_tool()],
                 # Forzar la tool: el modelo DEBE devolver un bloque tool_use con el
@@ -245,6 +264,9 @@ async def analizar(
             )
             tokens_in += resp.usage.input_tokens
             tokens_out += resp.usage.output_tokens
+            # Presentes en 0.42.0 y 0.116.0 (verificado). Pueden venir a None.
+            cache_w += getattr(resp.usage, "cache_creation_input_tokens", 0) or 0
+            cache_r += getattr(resp.usage, "cache_read_input_tokens", 0) or 0
             bloque = next(
                 (b for b in resp.content
                  if getattr(b, "type", None) == "tool_use"
@@ -268,6 +290,7 @@ async def analizar(
             return ResultadoAnalisis(
                 analisis=analisis, hash_contenido=hash_c,
                 tokens_entrada=tokens_in, tokens_salida=tokens_out,
+                tokens_cache_write=cache_w, tokens_cache_read=cache_r,
                 modelo=cfg.anthropic_model, fallido=False,
             )
         except Exception as e:
@@ -280,5 +303,6 @@ async def analizar(
     return ResultadoAnalisis(
         analisis=None, hash_contenido=hash_c,
         tokens_entrada=tokens_in, tokens_salida=tokens_out,
+        tokens_cache_write=cache_w, tokens_cache_read=cache_r,
         modelo=cfg.anthropic_model, fallido=True, error=ultimo_error,
     )

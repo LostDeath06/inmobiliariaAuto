@@ -5,22 +5,23 @@ y el pipeline sigue con los demás (nunca aborta el lote).
 
 from __future__ import annotations
 
-from decimal import Decimal
 from uuid import UUID
 
 from ..repositorios import (
     analisis as repo_analisis,
+    uso_tokens as repo_uso,
     configuracion_pais,
     inmuebles as repo_inmuebles,
     jobs as repo_jobs,
     perfiles as repo_perfiles,
     scores as repo_scores,
 )
-from . import analista_cualitativo, calculo_financiero, calculo_scoring
+from ..modelos.costes import FuenteUso
+from . import analista_cualitativo, calculo_financiero, calculo_scoring, costes
 
-# Precios de la API (operativo, no criterio de inversión) — USD por millón de tokens.
-_USD_ENTRADA_POR_M = Decimal("3")
-_USD_SALIDA_POR_M = Decimal("15")
+# Los precios YA NO viven aquí. Estaban hardcodeados ($3/$15), desactualizados
+# (Sonnet 5 está a $2/$10 introductorio) y sin contar los tokens de caché, que
+# es donde se va el dinero de verdad. Ahora se leen de `precios_modelo`.
 
 
 async def _codigos_pais(pais: str) -> tuple[list[str], list[str]]:
@@ -32,7 +33,7 @@ async def _codigos_pais(pais: str) -> tuple[list[str], list[str]]:
     return codigos_riesgo, codigos_oport
 
 
-async def procesar_inmueble(inmueble_id: UUID) -> dict:
+async def procesar_inmueble(inmueble_id: UUID, job_id: UUID | None = None) -> dict:
     """Análisis (con caché por hash) + métricas + scores de un inmueble."""
     inmueble = await repo_inmuebles.obtener(inmueble_id)
     if inmueble is None:
@@ -56,6 +57,19 @@ async def procesar_inmueble(inmueble_id: UUID) -> dict:
             )
         tokens_in += resultado.tokens_entrada
         tokens_out += resultado.tokens_salida
+        # Anota el gasto de ESTE inmueble: así hay coste por inmueble analizado,
+        # no solo un agregado por job.
+        await costes.registrar_uso(
+            fuente=FuenteUso.ANALISTA,
+            modelo=resultado.modelo,
+            entrada=resultado.tokens_entrada,
+            salida=resultado.tokens_salida,
+            cache_write=resultado.tokens_cache_write,
+            cache_read=resultado.tokens_cache_read,
+            job_id=job_id,
+            inmueble_id=inmueble_id,
+            detalle={"fallido": resultado.fallido},
+        )
 
     analisis = await repo_analisis.obtener(inmueble_id)
 
@@ -77,8 +91,18 @@ async def procesar_inmuebles(ids: list[UUID], job_id: UUID | None = None) -> dic
     tokens_in = tokens_out = 0
     fallidos = 0
     motivos: list[str] = []
+    detenido_por_tope: str | None = None
+    procesados = 0
     for inmueble_id in ids:
-        r = await procesar_inmueble(inmueble_id)
+        # El corte se comprueba ENTRE inmuebles: cada uno es idempotente y se
+        # completa entero o no empieza. Cortar a mitad dejaría un inmueble con
+        # análisis pero sin métricas, que es peor que no haberlo tocado.
+        permitido, motivo = await costes.comprobar_tope()
+        if not permitido:
+            detenido_por_tope = motivo
+            break
+        r = await procesar_inmueble(inmueble_id, job_id)
+        procesados += 1
         tokens_in += r.get("tokens_entrada", 0)
         tokens_out += r.get("tokens_salida", 0)
         if r.get("analisis_fallido"):
@@ -88,11 +112,12 @@ async def procesar_inmuebles(ids: list[UUID], job_id: UUID | None = None) -> dic
                 motivos.append(motivo)
 
     if job_id is not None:
-        coste = (Decimal(tokens_in) / Decimal(1_000_000) * _USD_ENTRADA_POR_M
-                 + Decimal(tokens_out) / Decimal(1_000_000) * _USD_SALIDA_POR_M)
+        # El coste sale del libro de uso (ya tarifado con los precios de BD), no
+        # de una fórmula aquí: una sola fuente de verdad para el gasto.
+        del_job = await repo_uso.por_job_id(job_id)
         cambios: dict = {
             "tokens_entrada": tokens_in, "tokens_salida": tokens_out,
-            "coste_estimado_usd": coste,
+            "coste_estimado_usd": del_job,
         }
         # Un coste de 0 con análisis fallidos significa que ni siquiera se llegó a
         # llamar a la API. Se escribe el motivo en el job para que salga en el
@@ -106,8 +131,9 @@ async def procesar_inmuebles(ids: list[UUID], job_id: UUID | None = None) -> dic
             )
             cambios["error_mensaje"] = resumen[:2000]
         await repo_jobs.actualizar(job_id, cambios)
-    return {"procesados": len(ids), "analisis_fallidos": fallidos,
-            "motivos_fallo": motivos,
+    return {"procesados": procesados, "pendientes_por_tope": len(ids) - procesados,
+            "analisis_fallidos": fallidos,
+            "motivos_fallo": motivos, "detenido_por_tope": detenido_por_tope,
             "tokens_entrada": tokens_in, "tokens_salida": tokens_out}
 
 

@@ -10,6 +10,7 @@ import json
 from uuid import UUID
 
 from ..integraciones.openclaw_client import JobScraping, OpenClawClient, OpenClawError
+from ..modelos.costes import FuenteUso
 from ..modelos.openclaw import SobreScraping
 from ..nucleo.config import obtener_config
 from ..repositorios import (
@@ -17,7 +18,7 @@ from ..repositorios import (
     jobs as repo_jobs,
     portales as repo_portales,
 )
-from . import constructor_prompt, ingesta, pipeline
+from . import constructor_prompt, costes, ingesta, pipeline
 
 
 async def ejecutar_busqueda(busqueda_id: UUID) -> dict:
@@ -29,7 +30,15 @@ async def ejecutar_busqueda(busqueda_id: UUID) -> dict:
     if portal is None:
         raise ValueError("Portal no existe")
 
+    # Tope de gasto ANTES de crear nada: un job de OpenClaw es lo más caro que
+    # hace el sistema (~1,75 USD estimado). Negarse a arrancar es limpio; no se
+    # crea el job siquiera, así que no queda basura que limpiar después.
     cfg = obtener_config()
+    permitido, motivo = await costes.comprobar_tope()
+    if not permitido:
+        return {"job_id": None, "modo": cfg.openclaw_mode, "estado": "NO_LANZADO",
+                "error": motivo}
+
     job = await repo_jobs.crear(busqueda_id)
     prompt = constructor_prompt.construir(busqueda, portal, cfg.openclaw_limite_anuncios, str(job.id))
     await repo_jobs.actualizar(job.id, {"prompt_enviado": prompt})
@@ -76,6 +85,23 @@ async def procesar_job_http(job_id: UUID) -> dict:
     except OpenClawError as e:
         await repo_jobs.actualizar(job_id, {"estado": "FALLIDO", "error_mensaje": str(e)})
         return {"job_id": str(job_id), "estado": "FALLIDO", "error": str(e)}
+    # Consumo del agente: es la partida GRANDE del gasto y hasta ahora no se
+    # anotaba en ningún sitio. Se registra antes del pipeline para que quede
+    # aunque el análisis posterior falle.
+    uso = await cliente.obtener_uso(job.openclaw_job_id)
+    if uso:
+        cfg = obtener_config()
+        await costes.registrar_uso(
+            fuente=FuenteUso.OPENCLAW,
+            modelo=getattr(cfg, "openclaw_modelo", None) or cfg.anthropic_model,
+            entrada=int(uso.get("input") or 0),
+            salida=int(uso.get("output") or 0),
+            cache_write=int(uso.get("cacheWrite") or 0),
+            cache_read=int(uso.get("cacheRead") or 0),
+            job_id=job_id,
+            detalle={"total_reportado": uso.get("total")},
+        )
+
     resumen = await ingesta.procesar(job_id, sobre)
     ids = [UUID(i) for i in resumen["inmuebles"]]
     proc = await pipeline.procesar_inmuebles(ids, job_id)

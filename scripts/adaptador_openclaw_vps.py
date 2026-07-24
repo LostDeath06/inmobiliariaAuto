@@ -166,6 +166,33 @@ def _json_de_texto(texto: str) -> dict | None:
         return None
 
 
+_CLAVES_USO = {"input", "output", "cacheWrite", "cacheRead", "total"}
+
+
+def _localizar_usage(nodo: object, prof: int = 0) -> dict | None:
+    """Busca el bloque de consumo (meta.agentMeta.usage) en la salida del CLI.
+
+    Se busca por FORMA, no por ruta: el esquema del envoltorio de --json no está
+    documentado y ya nos mordió una vez asumir una clave. Cualquier dict con al
+    menos dos de {input, output, cacheWrite, cacheRead, total} vale.
+    """
+    if prof > 8:
+        return None
+    if isinstance(nodo, dict):
+        if len(_CLAVES_USO & set(nodo)) >= 2 and any(
+            isinstance(nodo.get(k), (int, float)) for k in _CLAVES_USO
+        ):
+            return nodo
+        for v in nodo.values():
+            if (h := _localizar_usage(v, prof + 1)) is not None:
+                return h
+    if isinstance(nodo, list):
+        for v in nodo:
+            if (h := _localizar_usage(v, prof + 1)) is not None:
+                return h
+    return None
+
+
 _CLAVES_SOBRE = {"anuncios", "total_anuncios_extraidos", "extraccion_completa"}
 
 
@@ -240,7 +267,7 @@ async def _ejecutar_cli(mensaje: str, job_id: str) -> tuple[int, str, str]:
             pass
 
 
-async def ejecutar_openclaw(job_id: str, prompt: str, limite: int) -> dict:
+async def ejecutar_openclaw(job_id: str, prompt: str, limite: int) -> tuple[dict, dict | None]:
     """Ejecuta el job en OpenClaw y devuelve el sobre §5.4 validado.
 
     Lanza FalloOpenClaw si algo va mal. Nunca devuelve datos inventados ni un
@@ -258,6 +285,10 @@ async def ejecutar_openclaw(job_id: str, prompt: str, limite: int) -> dict:
         raiz: object = json.loads(out)
     except json.JSONDecodeError:
         raiz = out
+
+    # Consumo de tokens del agente. Sin esto, TODO el gasto de OpenClaw —que es
+    # el grande, dominado por la escritura de caché— era invisible en la app.
+    uso = _localizar_usage(raiz)
 
     sobre = _localizar_sobre(raiz)
     if sobre is None:
@@ -283,13 +314,15 @@ async def ejecutar_openclaw(job_id: str, prompt: str, limite: int) -> dict:
     except ValidationError as e:
         raise FalloOpenClaw(f"El JSON de OpenClaw no cumple el contrato §5.4: {e}") from e
 
-    return validado.model_dump()
+    return validado.model_dump(), uso
 
 
 async def _procesar(job_id: str, prompt: str, limite: int) -> None:
     _jobs[job_id]["estado"] = "EN_PROGRESO"
     try:
-        _jobs[job_id]["resultado"] = await ejecutar_openclaw(job_id, prompt, limite)
+        sobre, uso = await ejecutar_openclaw(job_id, prompt, limite)
+        _jobs[job_id]["resultado"] = sobre
+        _jobs[job_id]["uso"] = uso
         _jobs[job_id]["estado"] = "COMPLETADO"
     except Exception as e:  # noqa: BLE001 — cualquier fallo mata el job, con motivo
         _jobs[job_id]["estado"] = "FALLIDO"
@@ -301,7 +334,7 @@ async def _procesar(job_id: str, prompt: str, limite: int) -> None:
 async def crear_job(cuerpo: dict, authorization: str | None = Header(default=None)):
     _auth(authorization)
     job_id = cuerpo.get("job_id") or str(uuid.uuid4())
-    _jobs[job_id] = {"estado": "PENDIENTE", "resultado": None, "error": None}
+    _jobs[job_id] = {"estado": "PENDIENTE", "resultado": None, "error": None, "uso": None}
     asyncio.create_task(
         _procesar(job_id, cuerpo.get("prompt", ""), int(cuerpo.get("limite_anuncios", 50)))
     )
@@ -328,6 +361,21 @@ async def resultado_job(job_id: str, authorization: str | None = Header(default=
     if j["resultado"] is None:
         raise HTTPException(404, "Resultado no disponible todavía")
     return j["resultado"]
+
+
+@app.get("/jobs/{job_id}/uso")
+async def uso_job(job_id: str, authorization: str | None = Header(default=None)):
+    """Consumo de tokens del job, tal como lo reportó el agente.
+
+    Va aparte del resultado a propósito: el sobre §5.4 tiene `extra="forbid"` y
+    meter aquí un campo de telemetría rompería el contrato de extracción.
+    Devuelve `{"uso": null}` si el agente no lo reportó — un hueco explícito, no
+    un cero inventado.
+    """
+    _auth(authorization)
+    if job_id not in _jobs:
+        raise HTTPException(404, "Job desconocido")
+    return {"job_id": job_id, "uso": _jobs[job_id].get("uso")}
 
 
 @app.post("/jobs/{job_id}/cancelar")

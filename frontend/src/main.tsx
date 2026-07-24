@@ -5,6 +5,7 @@ import App from "./App";
 import "./index.css";
 import { ProveedorTema } from "./tema";
 import ConfigMercado from "./paginas/ConfigMercado";
+import Costes from "./paginas/Costes";
 import EstadoConfig from "./paginas/EstadoConfig";
 import Ficha from "./paginas/Ficha";
 import Inventario from "./paginas/Inventario";
@@ -20,6 +21,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <Ranking /> },
       { path: "inventario", element: <Inventario /> },
+      { path: "costes", element: <Costes /> },
       { path: "inmueble/:id", element: <Ficha /> },
       { path: "perfiles", element: <Perfiles /> },
       { path: "mercado", element: <ConfigMercado /> },
