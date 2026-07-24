@@ -14,8 +14,15 @@ function usd(v: unknown): string {
 
 const ETIQUETA_FUENTE: Record<string, string> = {
   ANALISTA: "Analista cualitativo",
-  OPENCLAW: "OpenClaw (extracción)",
+  OPENCLAW: "OpenClaw (jobs de extracción)",
+  OPENCLAW_CONVERSACION: "OpenClaw (conversaciones directas)",
 };
+
+/** Miles con separador, para tokens. */
+function tk(v: unknown): string {
+  const n = Number(v ?? 0);
+  return Number.isNaN(n) ? "—" : n.toLocaleString("es-ES");
+}
 
 export default function Costes() {
   const [resumen, setResumen] = useState<any>(null);
@@ -23,9 +30,11 @@ export default function Costes() {
   const [porJob, setPorJob] = useState<any[]>([]);
   const [porInmueble, setPorInmueble] = useState<any[]>([]);
   const [precios, setPrecios] = useState<any[]>([]);
+  const [sesiones, setSesiones] = useState<any>(null);
   const [cargando, setCargando] = useState(true);
   const [msg, setMsg] = useState("");
   const [guardando, setGuardando] = useState(false);
+  const [sincronizando, setSincronizando] = useState(false);
 
   const cargar = () => {
     setCargando(true);
@@ -35,9 +44,23 @@ export default function Costes() {
       api.get("/api/costes/por-job?limite=25").then(setPorJob),
       api.get("/api/costes/por-inmueble?limite=25").then(setPorInmueble),
       api.get("/api/costes/precios").then(setPrecios),
+      api.get("/api/costes/sesiones").then(setSesiones).catch(() => setSesiones(null)),
     ]).catch(() => {}).finally(() => setCargando(false));
   };
   useEffect(() => { cargar(); }, []);
+
+  const sincronizarSesiones = async () => {
+    setSincronizando(true);
+    try {
+      const r = await api.post("/api/costes/sesiones/sincronizar");
+      setMsg(r.legible
+        ? `${r.sesiones} sesiones leídas · ${r.nuevas_anotaciones} apuntes nuevos ($${Number(r.coste_usd || 0).toFixed(4)}).`
+        : `No se pudieron leer las sesiones: ${r.aviso || "el adaptador no las expone"}`);
+      cargar();
+    } catch (e) {
+      setMsg(`Error leyendo sesiones: ${e}`);
+    } finally { setSincronizando(false); }
+  };
 
   const guardarUmbral = async (clave: string, valor: string) => {
     setGuardando(true);
@@ -99,11 +122,38 @@ export default function Costes() {
         </div>
       )}
 
+      {/* El punto ciego. Va ARRIBA y en tono de peligro porque envenena la cifra
+          que más se mira: si el gasto de conversación no entra, «gasto total» no
+          es el gasto total, y quien lo lea creerá que controla lo que no controla. */}
+      {sesiones && !sesiones.contabilizado && (
+        <div className="aparecer rounded-lg border border-danger/40 bg-danger/10 px-4 py-3 shadow-elev-1">
+          <div className="flex items-center gap-2 text-danger text-[13px] font-semibold uppercase tracking-wide">
+            <IconoAviso /> «Gasto total» no es todo tu gasto
+          </div>
+          <p className="text-[13px] text-muted mt-1 leading-relaxed">
+            Aquí solo está lo que pasa por el sistema: el analista y los jobs de OpenClaw.
+            Tus <strong className="text-fg font-medium">conversaciones directas con el agente</strong>{" "}
+            (por terminal con <span className="cifra text-xs">openclaw agent</span>, o por Telegram)
+            gastan igual y <strong className="text-fg font-medium">no están contabilizadas</strong>.
+            No es un gasto menor: una sesión con 59 mensajes de historial cuesta ~76.500 tokens de
+            escritura de caché <em>en cada mensaje</em> — unos $0,19 por cosa que escribas, y subiendo.
+            Para incorporarlo, el adaptador tiene que poder leer los ficheros de sesión: pulsa
+            «Leer sesiones ahora» abajo para comprobarlo.
+          </p>
+        </div>
+      )}
+
       {msg && <Aviso alCerrar={() => setMsg("")}>{msg}</Aviso>}
 
       {/* Cabecera: las cifras que se miran primero */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Cifra titulo="Gasto total" valor={usd(total.coste_usd)} detalle={`${fmtCantidad(total.llamadas)} llamadas`} />
+        <Cifra
+          titulo="Gasto total"
+          valor={usd(total.coste_usd)}
+          detalle={sesiones && !sesiones.contabilizado
+            ? `${fmtCantidad(total.llamadas)} llamadas · sin conversaciones`
+            : `${fmtCantidad(total.llamadas)} llamadas`}
+        />
         <Cifra titulo="Hoy" valor={usd(umbrales.gasto_hoy_usd)} detalle={`umbral ${usd(umbrales.umbral_diario_usd)}`}
                alerta={umbrales.supera_diario} />
         <Cifra titulo="Escritura de caché" valor={fmtCantidad(total.tokens_cache_write)}
@@ -151,6 +201,17 @@ export default function Costes() {
           </div>
         )}
       </Card>
+
+      <SesionesAgente
+        datos={sesiones}
+        ocupado={sincronizando}
+        onSincronizar={sincronizarSesiones}
+        onUmbral={async (v) => {
+          await api.put("/api/costes/umbral-sesion", { umbral_tokens_sesion: v });
+          setMsg("Umbral de sesión guardado.");
+          cargar();
+        }}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
         <Card titulo="Por día" subtitulo="últimos 30 días">
@@ -278,9 +339,104 @@ export default function Costes() {
           no quedó registrado.{" "}</>
         )}
         El coste de cada llamada se congela con el precio vigente en ese momento: cambiar un
-        precio no reescribe el histórico.
+        precio no reescribe el histórico.{" "}
+        {sesiones && !sesiones.contabilizado && (
+          <strong className="text-muted">
+            Y hoy falta una fuente: el gasto de tus conversaciones directas con el agente no está
+            entrando en el libro.
+          </strong>
+        )}
       </p>
     </div>
+  );
+}
+
+/** Conversaciones directas con el agente: el gasto que el libro no veía.
+ *
+ *  Lo que importa aquí NO es el acumulado (ese ya está gastado) sino
+ *  `tokens_proximo_mensaje`: lo que costará el siguiente mensaje de esa sesión.
+ *  Es la única cifra sobre la que aún se puede actuar — limpiando la sesión. */
+function SesionesAgente({ datos, ocupado, onSincronizar, onUmbral }: {
+  datos: any; ocupado: boolean;
+  onSincronizar: () => void; onUmbral: (v: string) => void;
+}) {
+  const sesiones: any[] = datos?.sesiones || [];
+  const gordas: any[] = datos?.sesiones_a_limpiar || [];
+  const umbral = datos?.umbral_tokens_sesion;
+
+  return (
+    <Card
+      titulo="Conversaciones con el agente"
+      subtitulo="gasto de hablar con OpenClaw fuera del sistema (terminal, Telegram)"
+      acciones={
+        <Boton variante="secundario" cargando={ocupado} onClick={onSincronizar}>
+          {ocupado ? "Leyendo" : "Leer sesiones ahora"}
+        </Boton>
+      }
+    >
+      {gordas.length > 0 && (
+        <div className="mb-3 rounded-md border border-warning/40 bg-warning/10 p-3">
+          <div className="flex items-center gap-2 text-warning text-[13px] font-semibold uppercase tracking-wide">
+            <IconoAviso /> {gordas.length === 1 ? "1 sesión conviene limpiarla" : `${gordas.length} sesiones conviene limpiarlas`}
+          </div>
+          <p className="text-[13px] text-muted mt-1 leading-relaxed">
+            Pasan de {tk(umbral)} tokens por mensaje. Una sesión cobra su historial entero cada vez
+            que escribes, así que solo sube. Empezar una sesión nueva devuelve el coste al mínimo:
+            el procedimiento está en <span className="cifra text-xs">docs/OPENCLAW_SESIONES.md</span>.
+          </p>
+        </div>
+      )}
+
+      {sesiones.length === 0 ? (
+        <Vacio titulo="Ninguna sesión leída todavía">
+          El adaptador expone las sesiones en <span className="cifra text-xs">GET /sesiones</span>,
+          leyendo <span className="cifra text-xs">/root/.openclaw/agents/*/sessions/*.jsonl</span>.
+          Si no aparece nada, o el adaptador es de una versión anterior, o no puede leer esa ruta
+          (ajusta <span className="cifra text-xs">OPENCLAW_SESIONES_PATH</span>). Mientras tanto, el
+          gasto de tus conversaciones sigue sin contabilizarse.
+        </Vacio>
+      ) : (
+        <div className="tabla-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Sesión</th>
+                <th className="text-right">Próximo mensaje</th>
+                <th className="text-right">Turnos</th>
+                <th className="text-right">Caché escr.</th>
+                <th>Última actividad</th>
+              </tr>
+            </thead>
+            <tbody className="escalonado">
+              {sesiones.map((s, i) => (
+                <tr key={s.id} {...paso(i)} className={s.supera_umbral ? "bg-warning/5" : ""}>
+                  <td className="max-w-xs">
+                    <div className="cifra text-xs text-fg truncate" title={s.id}>{s.id}</div>
+                    <div className="text-[11px] text-faint">{[s.agente, s.modelo].filter(Boolean).join(" · ") || "—"}</div>
+                  </td>
+                  <td className={`text-right cifra ${s.supera_umbral ? "text-warning" : "text-fg"}`}>
+                    {tk(s.tokens_proximo_mensaje)}
+                  </td>
+                  <td className="text-right cifra text-muted">{tk(s.turnos)}</td>
+                  <td className="text-right cifra text-faint">{tk(s.tokens_cache_write)}</td>
+                  <td className="text-xs text-muted whitespace-nowrap">{fmtFechaHora(s.modificada_en)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="mt-4 flex flex-wrap items-end gap-3">
+        <UmbralCampo etiqueta="Avisar por encima de (tokens/mensaje)"
+                     valorInicial={umbral != null ? String(umbral) : ""}
+                     ocupado={ocupado} onGuardar={onUmbral} />
+      </div>
+      <p className="mt-3 text-xs text-faint leading-relaxed">
+        Las sesiones de los jobs (<span className="cifra">inmobiliaria:job:…</span>) no salen aquí:
+        ya se contabilizan como gasto del job y contarlas dos veces inflaría el total.
+      </p>
+    </Card>
   );
 }
 

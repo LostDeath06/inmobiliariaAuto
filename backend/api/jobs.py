@@ -6,7 +6,6 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
 
-from ..integraciones.openclaw_client import OpenClawClient
 from ..modelos.enumeraciones import EstadoJob
 from ..repositorios import anuncios as repo_anuncios
 from ..repositorios import jobs as repo_jobs
@@ -62,10 +61,30 @@ async def reintentar(job_id: UUID):
 
 @router.post("/{job_id}/cancelar")
 async def cancelar(job_id: UUID):
-    job = await repo_jobs.obtener(job_id)
-    if job is None:
-        raise HTTPException(404, "Job no encontrado")
-    if job.openclaw_job_id:
-        await OpenClawClient().cancelar_job(job.openclaw_job_id)
-    await repo_jobs.actualizar(job_id, {"estado": "CANCELADO"})
-    return {"job_id": str(job_id), "estado": "CANCELADO"}
+    """Aborta el job: mata el proceso de OpenClaw y anota el gasto ya hecho.
+
+    Devuelve `proceso_abortado`. Si viene `false`, el estado es CANCELADO pero el
+    agente puede seguir consumiendo: la UI tiene que decirlo, no celebrarlo.
+    """
+    try:
+        return await despacho.cancelar_job(job_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e
+    except despacho.EstadoNoCancelable as e:
+        raise HTTPException(409, str(e)) from e
+
+
+@router.post("/limpiar-zombis")
+async def limpiar_zombis(minutos: int = 60):
+    """Cierra como FALLIDO los jobs vivos parados desde hace más de `minutos`.
+
+    Para el ruido que ya existe: jobs anteriores al timeout duro, que el
+    adaptador olvidó al reiniciarse y que nadie va a resolver nunca. El worker
+    evita que se creen nuevos; esto limpia los viejos.
+    """
+    cerrados = await repo_jobs.cerrar_zombis(minutos)
+    return {
+        "cerrados": len(cerrados),
+        "minutos": minutos,
+        "jobs": [{"id": str(j.id), "openclaw_job_id": j.openclaw_job_id} for j in cerrados],
+    }

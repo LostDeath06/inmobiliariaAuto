@@ -226,6 +226,8 @@ python3 adaptador_openclaw_vps.py --sonda "responde solo con {\"ok\":true}"
 # 4. Instalar la unidad systemd
 sudo cp openclaw-adaptador.service /etc/systemd/system/
 sudo nano /etc/systemd/system/openclaw-adaptador.service   # pon OPENCLAW_API_KEY
+#   Revisa también OPENCLAW_ESTADO_PATH (estado que sobrevive al reinicio) y
+#   OPENCLAW_SESIONES_PATH (gasto de las conversaciones, ver docs/OPENCLAW_SESIONES.md)
 sudo systemctl daemon-reload
 sudo systemctl enable --now openclaw-adaptador
 systemctl status openclaw-adaptador
@@ -286,6 +288,59 @@ curl -H "Authorization: Bearer TU_TOKEN" http://127.0.0.1:8080/jobs/<job_id>
 El adaptador **nunca inventa datos**: si OpenClaw sale con error, si la salida no
 trae el JSON del contrato o si no valida contra §5.4, el job queda `FALLIDO` con el
 motivo y `resultado` vacío. En la app lo verás en el Monitor.
+
+### 6.7 Cancelar un job en curso
+
+Desde la app: **Monitor → Cancelar**, con confirmación. Aborta el proceso de
+OpenClaw (y sus hijos) y anota el gasto ya consumido en el libro de costes.
+
+Si el aviso dice que el adaptador **no confirmó** que el proceso muriera, no es
+retórica: compruébalo, porque puede seguir gastando.
+
+```bash
+pgrep -af openclaw                 # ¿queda algún proceso vivo?
+sudo pkill -f "openclaw agent"     # solo si sigue ahí tras cancelar
+```
+
+También por API, si prefieres la terminal:
+
+```bash
+curl -u admin:TU_PASSWORD -X POST http://localhost/api/jobs/<job_id>/cancelar
+```
+
+### 6.8 Jobs zombis (reinicio del adaptador)
+
+El adaptador guarda sus jobs **en memoria**. Antes, un `systemctl restart` los
+perdía y el backend —que los tenía como `EN_PROGRESO`— los sondeaba para siempre,
+recibiendo `404 Not Found` cada pocos segundos.
+
+Eso ya no ocurre, por tres vías independientes:
+
+1. El adaptador **persiste su estado** en `OPENCLAW_ESTADO_PATH` y, al arrancar,
+   cierra como `FALLIDO` los jobs que estaban vivos, con el motivo real (su
+   proceso murió con el servicio). Si no encuentra el fichero, lo avisa en el log.
+2. El backend **se rinde tras 5 consultas seguidas con 404**
+   (`config_app.max_sondeos_no_encontrado`) y marca el job `FALLIDO`.
+3. Hay un **timeout duro**: `OPENCLAW_TIMEOUT_SEGUNDOS` + 60 s del adaptador +
+   `config_app.margen_timeout_job_segundos`. Ningún job puede quedar
+   `EN_PROGRESO` indefinidamente, conteste el adaptador o no.
+
+**Limpiar los zombis que ya existen** (los anteriores a este cambio):
+
+```bash
+curl -u admin:TU_PASSWORD -X POST "http://localhost/api/jobs/limpiar-zombis?minutos=60"
+```
+
+O desde la app: **Monitor → Jobs zombis → Cerrar jobs de más de 60 min**.
+
+Si prefieres hacerlo en la base de datos, el equivalente:
+
+```sql
+UPDATE jobs SET estado = 'FALLIDO', finalizado_en = now(),
+       error_mensaje = 'Cerrado a mano: el adaptador no reconoce el job (reinicio).'
+WHERE estado IN ('PENDIENTE','ENVIADO','EN_PROGRESO')
+  AND COALESCE(iniciado_en, created_at) < now() - INTERVAL '60 minutes';
+```
 
 ---
 

@@ -37,6 +37,9 @@ class Job(ModeloBase):
     prompt_enviado: str | None = None
     openclaw_job_id: str | None = None
     intentos: int = 0
+    # Consultas seguidas que el adaptador contestó con 404. Al pasar del límite
+    # el job se cierra: el adaptador perdió su memoria y nadie va a responder.
+    sondeos_no_encontrado: int = 0
     error_mensaje: str | None = None
     tokens_entrada: int | None = None
     tokens_salida: int | None = None

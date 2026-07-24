@@ -588,6 +588,60 @@ export function Aviso({
   );
 }
 
+/** Confirmación para acciones que no se pueden deshacer.
+ *
+ *  Existe por el botón de cancelar un job: un clic accidental mata trabajo que
+ *  ya se ha pagado. El botón de confirmar NO recibe el foco automáticamente —
+ *  quien confirma tiene que ir a buscarlo — y Escape cierra sin hacer nada. */
+export function Confirmacion({
+  titulo,
+  children,
+  etiquetaConfirmar = "Confirmar",
+  variante = "peligro",
+  ocupado,
+  onConfirmar,
+  onCancelar,
+}: {
+  titulo: string;
+  children: ReactNode;
+  etiquetaConfirmar?: string;
+  variante?: "primario" | "peligro";
+  ocupado?: boolean;
+  onConfirmar: () => void;
+  onCancelar: () => void;
+}) {
+  useEffect(() => {
+    const alPulsar = (e: KeyboardEvent) => { if (e.key === "Escape") onCancelar(); };
+    window.addEventListener("keydown", alPulsar);
+    return () => window.removeEventListener("keydown", alPulsar);
+  }, [onCancelar]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-base/70 backdrop-blur-[2px] p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label={titulo}
+      onClick={(e) => { if (e.target === e.currentTarget) onCancelar(); }}
+    >
+      <div className="aparecer w-full max-w-md rounded-lg border border-line bg-surface shadow-elev-2">
+        <div className="border-b border-line px-4 py-3">
+          <div className="flex items-center gap-2 text-[13px] font-semibold uppercase tracking-wide text-danger">
+            <IconoAviso /> {titulo}
+          </div>
+        </div>
+        <div className="px-4 py-3 text-[13px] text-muted leading-relaxed space-y-2">{children}</div>
+        <div className="flex justify-end gap-2 border-t border-line px-4 py-3">
+          <Boton variante="secundario" onClick={onCancelar} disabled={ocupado}>No, volver</Boton>
+          <Boton variante={variante} cargando={ocupado} onClick={onConfirmar}>
+            {etiquetaConfirmar}
+          </Boton>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function IconoAviso({ className = "" }: { className?: string }) {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"

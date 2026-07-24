@@ -4,7 +4,9 @@
 > construido así. Si vuelves dentro de tres meses sin recordar nada, esto debería
 > bastarte para retomarlo sin repetir errores ya cometidos.
 > Documentos hermanos: `ARRANQUE.md` (levantarlo en Windows), `DESPLIEGUE.md` (VPS),
-> `docs/DECISIONES.md` (registro formal de decisiones).
+> `docs/DECISIONES.md` (registro formal de decisiones),
+> `docs/OPENCLAW_COSTES.md` (coste de los jobs) y `docs/OPENCLAW_SESIONES.md`
+> (coste de hablar con el agente, y cómo limpiar una sesión).
 
 ---
 
@@ -14,7 +16,7 @@ Producto **greenfield**, construido de la Fase 0 a la 9 y **desplegado 24/7**.
 
 - **Producción:** https://inmobiliariaauto.com (VPS Hostinger + Cloudflare Tunnel, tras contraseña)
 - **Local:** UI `localhost:5173` · API `localhost:8000/docs` · Postgres `5455`
-- **Tests:** `69 passed`
+- **Tests:** `92 passed`
 - **Inventario:** 32 inmuebles reales (ES 16 · DO 16 · VE 0), los 32 analizados por Claude
 - **Frente abierto único:** OpenClaw — código completo y desplegable, sin ejecutar aún
   contra el agente real
@@ -413,6 +415,44 @@ caché es tools → system → messages). Son ~1.900 tokens constantes, por enci
 de 1.024 de Sonnet 5. El anuncio va en `messages`, fuera del prefijo, así que no lo
 invalida.
 
+### 7.6 El punto ciego del libro: hablar con el agente
+
+El libro medía **una de las dos fuentes de gasto**. El analista y los jobs pasaban por el
+sistema y se anotaban; **las conversaciones directas con OpenClaw** —por terminal con
+`openclaw agent`, o por Telegram— no pasaban por ninguna parte y eran invisibles.
+
+No es un matiz. Medido en real: la sesión `agent:main:main` estaba en **76.501 tokens de
+`cacheWrite` en UN solo mensaje**, porque arrastra 59 mensajes de historial. Son **~$0,19
+por cada cosa que escribes**, y sube con cada mensaje. Para comparar: analizar un inmueble
+entero cuesta $0,0157. **Un mensaje de chat cuesta 12× más que analizar un inmueble.**
+
+Cómo se cierra: OpenClaw deja cada sesión en
+`/root/.openclaw/agents/*/sessions/*.jsonl`. El adaptador (que corre en el host, donde
+están esos ficheros) los expone en `GET /sesiones`; el worker los lee cada 5 minutos y los
+anota con fuente **`OPENCLAW_CONVERSACION`**, separada de `OPENCLAW` (jobs).
+
+Tres cautelas, cada una protegida por un test:
+
+- **Solo el incremento.** El `.jsonl` acumula: cada lectura ve el total de siempre. La
+  tabla `sesiones_openclaw` guarda la última foto y al libro va la diferencia. Sin eso,
+  cada pasada del worker sumaría la sesión entera otra vez — 288 veces al día.
+- **Las sesiones de job no se cuentan aquí:** ya entran por la vía del job. Duplicarlas
+  inflaría justo la cifra que existe para ser fiable.
+- **Limpiar una sesión no genera un apunte negativo.** El fichero encoge, el delta sale
+  negativo y no se anota: nadie devuelve dinero. Se acepta la foto nueva y se sigue.
+
+> **Lo que NO está verificado:** el formato interno de esos `.jsonl`. El adaptador busca el
+> bloque de consumo **por forma**, no por ruta de claves —el mismo criterio que con el
+> envoltorio de `--json`, que ya nos mordió una vez—. Si no encaja, la sesión llega con
+> `formato_reconocido: false` y **no se inventa un cero**: la pantalla avisa en rojo de que
+> «gasto total» no significa «todo lo que gasto». Un cero silencioso se leería como «esta
+> sesión no gastó».
+
+**Aviso de sesión que engorda:** la pantalla marca en ámbar toda sesión cuyo *próximo*
+mensaje supere `umbral_tokens_sesion` (50.000 por defecto). Se avisa sobre el próximo
+mensaje y no sobre el acumulado a propósito: el acumulado ya está gastado; lo otro todavía
+se puede evitar abriendo una sesión nueva. Procedimiento en `docs/OPENCLAW_SESIONES.md`.
+
 ---
 
 ## 8. Decisiones que cambiaron el producto (leer antes de repetir errores)
@@ -583,6 +623,74 @@ Probados uno a uno: código de salida ≠0 · salida sin el contrato · JSON que
 §5.4 · timeout. En **todos** los casos: job `FALLIDO` con motivo y `resultado` vacío.
 Nunca datos inventados. Cada job usa `--session-key` propia para no heredar contexto.
 
+### 9.4.1 Cancelar: el botón que no cancelaba
+
+Hasta ahora la única forma de parar un job era `systemctl restart openclaw-adaptador`
+desde la terminal — que además generaba un job zombi (§9.6). Con jobs que cuestan dinero
+real y saldo limitado, eso no vale.
+
+El endpoint `POST /jobs/{id}/cancelar` **ya existía en los dos lados**, y ahí estaba el
+problema: el del adaptador hacía literalmente esto y nada más:
+
+```python
+_jobs[job_id]["estado"] = "CANCELADO"
+```
+
+El subproceso `openclaw agent` **seguía vivo**. La app decía «CANCELADO» mientras el saldo
+bajaba. Es el peor modo de fallo posible: no solo no protege, sino que da sensación de
+control. Peor que no tener botón.
+
+Lo que hay ahora:
+
+- **Se mata el grupo de procesos entero** (`start_new_session` + `killpg`), SIGTERM y
+  SIGKILL tras 5 s. El CLI lanza hijos (gateway, navegador); matar solo al padre los
+  dejaría consumiendo detrás de una etiqueta que dice «cancelado». La unidad systemd lleva
+  `KillMode=control-group` por el mismo motivo.
+- **Un job cancelado en cola no llega a arrancar:** se comprueba el flag tras adquirir el
+  semáforo. Cancelar debe *impedir* el gasto, no solo interrumpirlo.
+- **El gasto parcial se anota.** `FalloOpenClaw` lleva el `uso` rescatado de la salida
+  parcial y entra en el libro con `detalle.parcial = true`. Un job muerto a mitad ya
+  consumió; dejarlo a cero sería contabilidad falsa. Aplica también a los jobs *fallidos*,
+  que antes tampoco anotaban nada.
+- **Si el proceso NO muere, se dice.** El adaptador devuelve `proceso_abortado: false`, el
+  motivo del job lo recoge y la UI lo muestra en rojo con qué comprobar en el VPS. Un
+  «CANCELADO» tranquilo sobre un agente que sigue gastando sería el fallo silencioso que
+  este sistema existe para evitar (Principio 3).
+- **Confirmación previa** en el Monitor, con el aviso de que lo ya consumido se cobra
+  igual: cancelar evita el gasto que falta, no recupera el hecho.
+
+### 9.6 Jobs zombi: por qué un reinicio dejaba ruido para siempre
+
+El adaptador guardaba sus jobs **solo en memoria** (`_jobs: dict`). Un
+`systemctl restart` los perdía, y el backend —que los tenía como `EN_PROGRESO`— los
+sondeaba **indefinidamente** recibiendo `404 Not Found` cada pocos segundos. No había
+ningún camino en el código que llevara a cerrar ese job.
+
+Dos agravantes que lo explican del todo:
+
+1. **El 404 se reintentaba 3 veces con backoff** antes de rendirse, porque `_peticion`
+   trataba cualquier `HTTPError` igual. Un 404 no es una caída: es el adaptador, vivo,
+   diciendo que no conoce el job. Ahora tiene tipo propio (`JobDesconocido`) y no se
+   reintenta.
+2. **`OPENCLAW_TIMEOUT_SEGUNDOS` no era un timeout de job.** Era el timeout de httpx y el
+   `--timeout` del CLI. Ningún job tenía fecha límite en BD, y `iniciado_en` **no se
+   rellenaba nunca**, así que no había ni contra qué medirlo.
+
+Ahora hay **tres salidas independientes**, y ninguna depende de que el adaptador colabore:
+
+| Salida | Cuándo |
+|---|---|
+| El adaptador cierra sus huérfanos | Al arrancar: persiste su estado en disco y marca `FALLIDO` lo que estaba vivo, con el motivo real. Si su memoria está vacía, lo avisa en el log |
+| El backend se rinde | Tras `max_sondeos_no_encontrado` (5) consultas **seguidas** con 404 |
+| Timeout duro | `OPENCLAW_TIMEOUT_SEGUNDOS` + 60 s del adaptador + `margen_timeout_job_segundos` |
+
+El contador de 404 es de **seguidos, no acumulados** (una respuesta buena lo devuelve a
+cero) y vive **en BD, no en el worker**: el worker también se reinicia, y un contador en
+memoria volvería a empezar de cero cada vez, que es como no tenerlo.
+
+Para el ruido que ya existe: **Monitor → Jobs zombis**, o
+`POST /api/jobs/limpiar-zombis?minutos=60`. El SQL equivalente está en `DESPLIEGUE.md` §6.8.
+
 ### 9.5 El matiz de red
 
 OpenClaw y el adaptador corren en el **host**; el backend en Docker. Dentro de un
@@ -592,7 +700,7 @@ adaptador a escuchar en `0.0.0.0`, y por tanto **a cerrar el 8080 en `ufw`**.
 
 ---
 
-## 10. Tests (69) — y cuáles son barreras
+## 10. Tests (92) — y cuáles son barreras
 
 | Fichero | N.º | Qué cubre |
 |---|---|---|
@@ -601,6 +709,9 @@ adaptador a escuchar en `0.0.0.0`, y por tanto **a cerrar el 8080 en `ufw`**.
 | `test_confotur.py` | **9** | CONFOTUR exime el gasto marcado (no otro); `null` ≠ `false`; cambia el ROI |
 | `test_analista_tool_use.py` | **5** | La salida estructurada va por tool use, no por `output_config` |
 | `test_costes.py` | **6** | Las cuatro clases de token se tarifan por separado; sin precio, 0 con aviso |
+| `test_cancelacion_jobs.py` | **8** | Cancelar mata procesos **reales**; anota el gasto parcial; si el proceso no muere, se dice |
+| `test_jobs_zombis.py` | **6** | El 404 no se reintenta; se cierra tras N seguidos; timeout duro sin depender del adaptador |
+| `test_sesiones_openclaw.py` | **10** | Solo el incremento; los jobs no se cuentan dos veces; limpiar no genera apunte negativo |
 | `test_validacion_ingesta.py` | 7 | Válido, cuarentena, no-invención |
 | `test_senales_no_reconocidas.py` | **8** | Códigos fuera de catálogo nunca se pierden |
 | `test_blindaje_senales_ignoradas.py` | **6** | Un score con señales ignoradas nunca es COMPLETO |
@@ -641,20 +752,39 @@ Ordenado por lo que morderá antes.
 9. **El libro de gasto empieza el día que se desplegó** (§7.5). Lo consumido antes —los
    $5 que motivaron todo esto— no quedó anotado en ninguna parte y **no se puede
    reconstruir**. «Gasto total» significa «desde que existe el libro».
-10. **Preámbulo de OpenClaw sin podar:** ~22.200 tokens por job antes de empezar
+10. **El lector de sesiones no está probado contra un OpenClaw real** (§7.6). El formato
+    de los `.jsonl` no está documentado; el lector busca el consumo **por forma** y está
+    probado contra ficheros sintéticos, no contra los del VPS. Si no encaja, la pantalla
+    lo dice en rojo en vez de fingir un cero — pero hasta ejecutarlo allí, **el punto
+    ciego sigue abierto**. Es lo primero que hay que comprobar tras desplegar: Costes →
+    «Leer sesiones ahora».
+11. **La cancelación no está ejercitada contra un proceso real de OpenClaw.** El aborto
+    del grupo de procesos sí está probado contra procesos reales (incluido uno que
+    ignora `SIGTERM`), pero no contra `openclaw agent` en el VPS. Si al cancelar el aviso
+    sale en rojo diciendo que el proceso no murió, **hazle caso**: `pgrep -af openclaw`.
+12. **Preámbulo de OpenClaw sin podar:** ~22.200 tokens por job antes de empezar
     (§8.8). Es el mayor ahorro pendiente (~73%); el procedimiento está en
     `docs/OPENCLAW_COSTES.md`, falta aplicarlo en el VPS y medirlo.
-11. **Sin TLS extremo a extremo** (§7.3).
-12. **RLS permisivo:** la barrera real es la auth de nginx, no la base de datos.
+13. **Sin TLS extremo a extremo** (§7.3).
+14. **RLS permisivo:** la barrera real es la auth de nginx, no la base de datos.
 
 *Resuelto desde la última versión de este documento:* el tooltip de auditoría de métricas
-ya no usa `title` nativo (no funcionaba en táctil) — es un panel pulsable; y los inmuebles
-`NO_CALCULABLE` que «desaparecían» del ranking ahora se ven en la vista Inventario (§7.4).
+ya no usa `title` nativo (no funcionaba en táctil) — es un panel pulsable; los inmuebles
+`NO_CALCULABLE` que «desaparecían» del ranking ahora se ven en la vista Inventario (§7.4);
+**cancelar un job ahora mata el proceso** en vez de cambiar una etiqueta (§9.4.1); y
+**ningún job puede quedarse `EN_PROGRESO` para siempre** (§9.6).
 
 ---
 
 ## 12. Próximos pasos
 
+0. **Desplegar el adaptador nuevo y comprobar las dos cosas que no se han podido probar
+   aquí** (§11.10 y §11.11), en este orden porque ambas afectan al saldo:
+   - `curl -H "Authorization: Bearer …" http://127.0.0.1:8080/sesiones` → si sale
+     `"legible": false` o `formato_reconocido: false`, el punto ciego sigue abierto.
+   - Lanzar un job, cancelarlo desde el Monitor y comprobar `pgrep -af openclaw`.
+   Requiere `StateDirectory` y las variables nuevas de la unidad systemd
+   (`OPENCLAW_ESTADO_PATH`, `OPENCLAW_SESIONES_PATH`).
 1. **Podar el preámbulo de OpenClaw** (`docs/OPENCLAW_COSTES.md`). Es lo primero porque
    es dinero saliendo: ~73% de ahorro por job, sin tocar ninguna garantía. Agente
    dedicado con `skills: []` y `OPENCLAW_AGENT_ID` en el systemd del adaptador.

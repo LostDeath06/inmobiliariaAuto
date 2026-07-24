@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException
 from ..modelos.costes import FuenteUso
 from ..repositorios import configuracion_pais
 from ..repositorios import uso_tokens as repo
-from ..servicios import costes
+from ..servicios import costes, sesiones_openclaw
 
 router = APIRouter(prefix="/api/costes", tags=["costes"])
 
@@ -31,6 +31,33 @@ async def resumen():
         "umbrales": await costes.estado_umbrales(),
         "registro_desde": await repo.registro_desde(),
     }
+
+
+@router.get("/sesiones")
+async def sesiones():
+    """Conversaciones directas con el agente: el punto ciego del libro.
+
+    Si `contabilizado` es False, el gasto de hablar con OpenClaw por terminal o
+    Telegram NO está entrando aquí y «gasto total» no significa «todo lo que
+    gasto». La pantalla tiene que decirlo, no dejarlo implícito.
+    """
+    return await sesiones_openclaw.estado()
+
+
+@router.post("/sesiones/sincronizar")
+async def sincronizar_sesiones():
+    """Fuerza la lectura de las sesiones ahora (el worker ya lo hace cada 5 min)."""
+    return await sesiones_openclaw.sincronizar()
+
+
+@router.put("/umbral-sesion")
+async def establecer_umbral_sesion(body: dict):
+    """Tokens por mensaje a partir de los cuales avisar de que hay que limpiar."""
+    if body.get("umbral_tokens_sesion") is not None:
+        await configuracion_pais.establecer_config_app(
+            "umbral_tokens_sesion", str(int(body["umbral_tokens_sesion"]))
+        )
+    return await sesiones_openclaw.estado()
 
 
 @router.get("/por-dia")

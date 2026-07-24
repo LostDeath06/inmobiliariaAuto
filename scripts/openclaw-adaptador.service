@@ -39,6 +39,15 @@ Environment=OPENCLAW_MAX_CONCURRENTES=1
 # Opcionales: agente y modelo concretos (si se dejan vacíos, usa la config del VPS).
 # Environment=OPENCLAW_AGENT_ID=
 # Environment=OPENCLAW_MODELO=anthropic/claude-sonnet-5
+# Estado de los jobs en disco. SIN ESTO, un `systemctl restart` deja al backend
+# consultando en bucle jobs que el adaptador ya no reconoce (404 cada 3 s, para
+# siempre). Con esto, al arrancar los cierra como FALLIDO con su motivo real.
+Environment=OPENCLAW_ESTADO_PATH=/var/lib/openclaw-adaptador/jobs.json
+# Sesiones de conversación del agente, para que el dashboard de costes vea el
+# gasto de hablar con OpenClaw por terminal o Telegram (hoy es un punto ciego).
+Environment=OPENCLAW_SESIONES_PATH=/root/.openclaw/agents
+# Segundos entre SIGTERM y SIGKILL al cancelar un job.
+Environment=OPENCLAW_GRACIA_KILL_SEG=5
 # El CLI de OpenClaw suele instalarse en /usr/local/bin o vía npm global.
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.npm-global/bin
 
@@ -46,6 +55,15 @@ Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/r
 # 0.0.0.0 es NECESARIO: el backend vive en Docker y entra por host.docker.internal.
 # Con 127.0.0.1 el contenedor NO llegaría. Protege el puerto con ufw (ver DESPLIEGUE.md).
 ExecStart=/usr/bin/env uvicorn adaptador_openclaw_vps:app --host 0.0.0.0 --port 8080
+
+# Crea /var/lib/openclaw-adaptador con los permisos correctos (ahí va el estado).
+StateDirectory=openclaw-adaptador
+
+# Al parar o reiniciar, mata TODO el grupo de procesos: el CLI lanza hijos
+# (gateway, navegador) y `KillMode=process` los dejaría huérfanos consumiendo
+# tokens después de que systemd diera el servicio por parado.
+KillMode=control-group
+TimeoutStopSec=20
 
 Restart=always
 RestartSec=5

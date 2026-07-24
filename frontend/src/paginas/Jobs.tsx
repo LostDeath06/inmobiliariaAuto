@@ -1,7 +1,14 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
-import { Aviso, Boton, Card, Chip, IconoAviso, Vacio, fmtDuracion, fmtFechaHora, paso } from "../ui";
+import {
+  Aviso, Boton, Card, Chip, Confirmacion, IconoAviso, Vacio,
+  fmtDuracion, fmtFechaHora, paso,
+} from "../ui";
+
+/** Estados desde los que un job todavía puede pararse — y todavía puede gastar.
+ *  Espejo de `despacho.CANCELABLES`: fuera de aquí no hay nada que abortar. */
+const CANCELABLES = new Set(["PENDIENTE", "ENVIADO", "EN_PROGRESO"]);
 
 const TONO_ESTADO: Record<string, string> = {
   COMPLETADO: "text-positive border-positive/30 bg-positive/10",
@@ -87,6 +94,60 @@ export default function Jobs() {
   const [ingestando, setIngestando] = useState(false);
   const [reprocesando, setReprocesando] = useState(false);
   const [avisoReproceso, setAvisoReproceso] = useState("");
+  const [porCancelar, setPorCancelar] = useState<any>(null);
+  const [cancelando, setCancelando] = useState(false);
+  const [avisoCancelacion, setAvisoCancelacion] = useState<
+    { texto: string; tono: "positive" | "danger" } | null
+  >(null);
+  const [limpiando, setLimpiando] = useState(false);
+
+  /** Cancelar de verdad: aborta el proceso de OpenClaw, no solo la etiqueta.
+   *  Si el adaptador NO confirma que el proceso murió, se dice en tono de
+   *  peligro: un "cancelado" tranquilo sobre un agente que sigue gastando es
+   *  exactamente el fallo silencioso que este sistema existe para evitar. */
+  const cancelar = async (job: any) => {
+    setCancelando(true);
+    try {
+      const r = await api.post(`/api/jobs/${job.id}/cancelar`);
+      const gasto = r.gasto_parcial;
+      const cola = gasto?.coste_usd
+        ? ` Gasto anotado hasta el corte: $${Number(gasto.coste_usd).toFixed(4)}${gasto.parcial ? " (parcial)" : ""}.`
+        : " No se pudo leer el gasto del agente: puede que no llegara a reportarlo.";
+      setAvisoCancelacion(
+        r.proceso_abortado
+          ? { tono: "positive", texto: `Job cancelado y proceso de OpenClaw abortado.${cola}` }
+          : { tono: "danger", texto:
+              `Estado marcado CANCELADO, pero el adaptador NO confirmó que el proceso muriera` +
+              `${r.detalle ? ` (${r.detalle})` : ""}. Puede seguir consumiendo tokens: revísalo en el VPS.${cola}` },
+      );
+      setPorCancelar(null);
+      cargar();
+    } catch (e) {
+      setAvisoCancelacion({ tono: "danger", texto: `No se pudo cancelar: ${e}` });
+    } finally {
+      setCancelando(false);
+    }
+  };
+
+  /** Cierra los jobs que llevan una hora colgados. Para el ruido que ya existe:
+   *  jobs que el adaptador olvidó al reiniciarse y que nadie va a resolver. */
+  const limpiarZombis = async () => {
+    setLimpiando(true);
+    try {
+      const r = await api.post("/api/jobs/limpiar-zombis?minutos=60");
+      setAvisoCancelacion({
+        tono: "positive",
+        texto: r.cerrados === 0
+          ? "No hay jobs zombis: ninguno lleva más de 60 minutos sin avanzar."
+          : `${r.cerrados} job(s) zombis cerrados como FALLIDO. El backend deja de consultarlos.`,
+      });
+      cargar();
+    } catch (e) {
+      setAvisoCancelacion({ tono: "danger", texto: `Error limpiando: ${e}` });
+    } finally {
+      setLimpiando(false);
+    }
+  };
 
   const reprocesar = async () => {
     setReprocesando(true);
@@ -137,8 +198,38 @@ export default function Jobs() {
   const selVivo = jobs.find((j) => j.id === sel?.id) || sel;
   const fallidos = jobs.filter((j) => j.estado === "FALLIDO" && j.error_mensaje);
 
+  const vivos = jobs.filter((j) => CANCELABLES.has(j.estado));
+
   return (
     <div className="space-y-4">
+      {avisoCancelacion && (
+        <Aviso tono={avisoCancelacion.tono} msSalida={avisoCancelacion.tono === "danger" ? 0 : 8000}
+               alCerrar={() => setAvisoCancelacion(null)}>
+          {avisoCancelacion.texto}
+        </Aviso>
+      )}
+
+      {porCancelar && (
+        <Confirmacion
+          titulo="Cancelar el job en curso"
+          etiquetaConfirmar="Sí, cancelar el job"
+          ocupado={cancelando}
+          onConfirmar={() => cancelar(porCancelar)}
+          onCancelar={() => setPorCancelar(null)}
+        >
+          <p>
+            Se abortará el proceso de OpenClaw del job{" "}
+            <span className="cifra text-fg">{String(porCancelar.id).slice(0, 8)}</span>{" "}
+            ({porCancelar.estado}). <strong className="text-fg font-medium">No se puede deshacer</strong>:
+            el trabajo hecho hasta ahora se pierde y no habrá anuncios de este job.
+          </p>
+          <p>
+            Lo ya consumido <strong className="text-fg font-medium">sí se cobra</strong> y queda
+            anotado en el libro de costes. Cancelar evita el gasto que falta, no recupera el hecho.
+          </p>
+        </Confirmacion>
+      )}
+
       {/* Lo primero de la pantalla si algo se rompió: el motivo, sin tener que
           abrir el job ni entrar por SSH a mirar los logs del contenedor. */}
       {fallidos.length > 0 && (
@@ -160,6 +251,49 @@ export default function Jobs() {
           </div>
         </Card>
       )}
+
+      {vivos.length > 0 && (
+        <Card
+          titulo={vivos.length === 1 ? "1 job en curso" : `${vivos.length} jobs en curso`}
+          subtitulo="cada uno cuesta dinero mientras corre — se pueden parar aquí"
+        >
+          <div className="space-y-2 escalonado">
+            {vivos.map((j, i) => (
+              <div key={j.id} {...paso(i)}
+                   className="flex flex-wrap items-center gap-2 py-1.5 border-b border-line/70 last:border-0">
+                <span className="cifra text-[11px] text-faint">{String(j.id).slice(0, 8)}</span>
+                <EstadoJob estado={j.estado} />
+                {/* Se recalcula con el refresco de 5 s de la lista. */}
+                <span className="cifra text-xs text-muted">
+                  lleva {fmtDuracion(j.iniciado_en || j.created_at, new Date().toISOString())}
+                </span>
+                <div className="ml-auto">
+                  <Boton variante="peligro" onClick={() => setPorCancelar(j)}>Cancelar</Boton>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      <Card
+        titulo="Jobs zombis"
+        subtitulo="los que quedaron colgados antes de que hubiera timeout"
+        acciones={
+          <Boton variante="secundario" cargando={limpiando} onClick={limpiarZombis}>
+            {limpiando ? "Limpiando" : "Cerrar jobs de más de 60 min"}
+          </Boton>
+        }
+      >
+        <p className="text-[13px] text-muted leading-relaxed">
+          El adaptador guarda sus jobs <strong className="text-fg font-medium">en memoria</strong>,
+          así que un <span className="cifra text-xs">systemctl restart</span> los pierde. El backend,
+          que los tenía como <span className="cifra text-xs">EN_PROGRESO</span>, seguía
+          consultándolos y recibiendo <span className="cifra text-xs">404</span> indefinidamente.
+          Eso ya no pasa con los jobs nuevos: el worker se rinde tras varios 404 seguidos y aplica
+          un timeout duro. Esto cierra los que quedaron de antes, para que dejen de ensuciar los logs.
+        </p>
+      </Card>
 
       <Card
         titulo="Reprocesar análisis"
@@ -243,7 +377,15 @@ export default function Jobs() {
                     <td className="text-right cifra text-fg">{j.total_anuncios_validos ?? "—"}</td>
                     <td className="text-right cifra text-muted">{j.total_anuncios_cuarentena ?? "—"}</td>
                     <td className="text-right cifra text-muted">{j.coste_estimado_usd ? Number(j.coste_estimado_usd).toFixed(4) : "—"}</td>
-                    <td className="text-right"><Boton variante="fantasma" onClick={() => abrir(j)}>Abrir</Boton></td>
+                    <td className="text-right whitespace-nowrap">
+                      {CANCELABLES.has(j.estado) && (
+                        <Boton variante="peligro" onClick={() => setPorCancelar(j)}
+                               title="Aborta el proceso de OpenClaw y deja de gastar">
+                          Cancelar
+                        </Boton>
+                      )}
+                      <Boton variante="fantasma" onClick={() => abrir(j)}>Abrir</Boton>
+                    </td>
                   </tr>
                 ))}
                 {jobs.length === 0 && (

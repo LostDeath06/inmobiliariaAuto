@@ -17,10 +17,18 @@ from .base import ModeloBase
 
 
 class FuenteUso(str, Enum):
-    """Quién gastó. Son las dos únicas cosas que llaman a la API."""
+    """Quién gastó.
+
+    La tercera existe porque el libro tenía un punto ciego: solo veía el gasto
+    que pasa por el sistema. Hablar con el agente por terminal o por Telegram
+    cuesta igual, y una sesión larga cuesta MÁS que un job (reescribe todo su
+    historial en cada mensaje). Va separada de OPENCLAW a propósito: mezclarlas
+    escondería que charlar puede salir más caro que trabajar.
+    """
 
     ANALISTA = "ANALISTA"   # backend → juicio cualitativo
-    OPENCLAW = "OPENCLAW"   # agente de extracción, vía adaptador
+    OPENCLAW = "OPENCLAW"   # agente de extracción (jobs), vía adaptador
+    OPENCLAW_CONVERSACION = "OPENCLAW_CONVERSACION"  # sesiones directas con el agente
 
 
 class PrecioModelo(ModeloBase):
